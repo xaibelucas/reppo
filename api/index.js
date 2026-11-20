@@ -54,7 +54,15 @@ module.exports = async (req, res) => {
   }
 
   const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const pathname = reqUrl.pathname;
+  
+  // Resolve pathname supporting both local server and Vercel serverless rewrites
+  let pathname = reqUrl.pathname;
+  const pathParam = reqUrl.searchParams.get('path');
+  if (pathParam) {
+    pathname = '/api/' + pathParam.replace(/^\/+/, '');
+  } else if (req.headers['x-matched-path']) {
+    pathname = req.headers['x-matched-path'];
+  }
 
   // 1. REGISTER
   if (pathname === '/api/auth/register' && req.method === 'POST') {
