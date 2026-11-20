@@ -1581,7 +1581,7 @@ function renderActiveWorkoutSession() {
         <!-- Add Set Button -->
         <div class="mt-3 flex items-center justify-between">
           <button onclick="addSetToExercise(${exIndex})" class="card-opaque-subtle hover:bg-zinc-800 text-zinc-200 text-xs px-3 py-1.5 rounded-lg border border-zinc-700/80 flex items-center gap-1.5 transition-all">
-            <i data-lucide="plus" class="w-3.5 h-3.5"></i> + Nova Série
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Nova Série
           </button>
           <span class="text-[11px] text-zinc-400 font-mono">
             ${item.sets.filter(s => s.completed).length} de ${item.sets.length} concluídas
