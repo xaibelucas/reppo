@@ -1,4 +1,4 @@
-// Vercel Serverless Function Handler for Academia Tracker API
+// Vercel Serverless Function Handler for Reppo API
 const db = require('../supabase');
 const crypto = require('crypto');
 
@@ -42,7 +42,7 @@ function sendJson(res, statusCode, data) {
 }
 
 module.exports = async (req, res) => {
-  // CORS
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -67,7 +67,7 @@ module.exports = async (req, res) => {
   // 1. REGISTER
   if (pathname === '/api/auth/register' && req.method === 'POST') {
     try {
-      const { name, email, password } = await parseJsonBody(req);
+      const { name, email, password, username, bio } = await parseJsonBody(req);
       if (!name || !email || !password) {
         return sendJson(res, 400, { error: 'Nome, e-mail e senha são obrigatórios.' });
       }
@@ -80,10 +80,12 @@ module.exports = async (req, res) => {
 
       const { hash, salt } = hashPassword(password);
       const userId = 'usr_' + Date.now();
+      const cleanUsername = username ? username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '') : name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      const user = await db.createProfile({
+      const newUser = await db.createProfile({
         id: userId,
         name: name.trim(),
+        username: cleanUsername,
         email: normalizedEmail,
         passwordHash: hash,
         salt,
@@ -92,7 +94,10 @@ module.exports = async (req, res) => {
           height: null,
           goal: 'Hipertrofia',
           experienceLevel: 'Intermediário',
-          weightHistory: []
+          weightHistory: [],
+          bio: bio || '',
+          avatarUrl: null,
+          following: []
         }
       });
 
@@ -100,10 +105,11 @@ module.exports = async (req, res) => {
       await db.createSession(token, userId);
 
       const safeUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        profile: user.profile
+        id: newUser.id,
+        name: newUser.name,
+        username: newUser.username,
+        email: newUser.email,
+        profile: newUser.profile
       };
 
       return sendJson(res, 201, { token, user: safeUser, message: 'Conta criada com sucesso!' });
@@ -134,6 +140,7 @@ module.exports = async (req, res) => {
       const safeUser = {
         id: user.id,
         name: user.name,
+        username: user.username,
         email: user.email,
         profile: user.profile
       };
@@ -152,25 +159,26 @@ module.exports = async (req, res) => {
       const token = authHeader.slice(7).trim();
       await db.deleteSession(token);
     }
-    return sendJson(res, 200, { success: true });
+    return sendJson(res, 200, { success: true, message: 'Sessão encerrada com sucesso.' });
   }
 
-  // 4. ME
+  // 4. GET ME
   if (pathname === '/api/auth/me' && req.method === 'GET') {
     const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
+    if (!user) return sendJson(res, 401, { error: 'Sessão expirada ou inválida.' });
 
     return sendJson(res, 200, {
       user: {
         id: user.id,
         name: user.name,
+        username: user.username,
         email: user.email,
         profile: user.profile
       }
     });
   }
 
-  // 5. UPDATE PROFILE
+  // 5. UPDATE USER PROFILE
   if (pathname === '/api/user/profile' && req.method === 'PUT') {
     const user = await getAuthenticatedUser(req);
     if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
@@ -179,6 +187,9 @@ module.exports = async (req, res) => {
       const updates = await parseJsonBody(req);
       const profileUpdates = {};
       if (updates.name) profileUpdates.name = updates.name.trim();
+      if (updates.username) profileUpdates.username = updates.username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (updates.bio !== undefined) profileUpdates.bio = updates.bio;
+      if (updates.avatarUrl !== undefined) profileUpdates.avatarUrl = updates.avatarUrl;
       if (updates.goal) profileUpdates.goal = updates.goal;
       if (updates.height) profileUpdates.height = parseFloat(updates.height);
       if (updates.experienceLevel) profileUpdates.experienceLevel = updates.experienceLevel;
@@ -194,7 +205,16 @@ module.exports = async (req, res) => {
       }
 
       const updated = await db.updateProfile(user.id, profileUpdates);
-      return sendJson(res, 200, { success: true, profile: updated.profile, name: updated.name });
+      return sendJson(res, 200, {
+        success: true,
+        user: {
+          id: updated.id,
+          name: updated.name,
+          username: updated.username,
+          email: updated.email,
+          profile: updated.profile
+        }
+      });
     } catch (e) {
       console.error('Erro ao atualizar perfil:', e);
       return sendJson(res, 500, { error: 'Erro ao atualizar dados.' });
@@ -213,20 +233,21 @@ module.exports = async (req, res) => {
     ]);
 
     return sendJson(res, 200, {
-      exercises,
-      routines: routinesData.userRoutines,
-      sharedRoutines: routinesData.sharedRoutines,
-      history,
       user: user ? {
         id: user.id,
         name: user.name,
+        username: user.username,
         email: user.email,
         profile: user.profile
-      } : null
+      } : null,
+      exercises,
+      routines: routinesData.userRoutines,
+      sharedRoutines: routinesData.sharedRoutines,
+      history
     });
   }
 
-  // 7. SAVE DATA
+  // 7. SAVE USER DATA
   if (pathname === '/api/save' && req.method === 'POST') {
     const user = await getAuthenticatedUser(req);
     if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
@@ -266,6 +287,66 @@ module.exports = async (req, res) => {
       return sendJson(res, 201, { success: true, routine: cloned, message: 'Rotina clonada com sucesso para sua conta!' });
     } catch (e) {
       return sendJson(res, 500, { error: 'Erro ao clonar rotina.' });
+    }
+  }
+
+  // 9. SOCIAL: SEARCH USERS
+  if (pathname === '/api/users/search' && req.method === 'GET') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
+
+    const q = reqUrl.searchParams.get('q') || '';
+    try {
+      const results = await db.searchUsers(q, user.id);
+      return sendJson(res, 200, { users: results });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'Erro na busca de usuários.' });
+    }
+  }
+
+  // 10. SOCIAL: TOGGLE FOLLOW
+  if (pathname === '/api/users/follow' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
+
+    try {
+      const { targetUserId } = await parseJsonBody(req);
+      if (!targetUserId) return sendJson(res, 400, { error: 'ID do usuário obrigatório.' });
+
+      const result = await db.toggleFollow(user.id, targetUserId);
+      return sendJson(res, 200, { success: true, ...result });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'Erro ao seguir/deixar de seguir.' });
+    }
+  }
+
+  // 11. SOCIAL: GET FEED (WORKOUTS FROM FOLLOWED USERS)
+  if (pathname === '/api/feed' && req.method === 'GET') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
+
+    try {
+      const feed = await db.getFeedForUser(user.id);
+      return sendJson(res, 200, { feed });
+    } catch (e) {
+      console.error('Erro ao buscar feed:', e);
+      return sendJson(res, 500, { error: 'Erro ao carregar feed.' });
+    }
+  }
+
+  // 12. SOCIAL: TOGGLE LIKE WORKOUT
+  if (pathname === '/api/history/like' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Não autenticado.' });
+
+    try {
+      const { workoutId } = await parseJsonBody(req);
+      if (!workoutId) return sendJson(res, 400, { error: 'ID do treino obrigatório.' });
+
+      const result = await db.toggleLikeWorkout(user.id, workoutId);
+      return sendJson(res, 200, { success: true, ...result });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'Erro ao curtir treino.' });
     }
   }
 

@@ -1,4 +1,4 @@
-// Supabase Client Adapter for Academia Tracker
+// Supabase Client Adapter for Reppo
 // Connects to PostgreSQL database via Supabase PostgREST API with Zero external dependencies!
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://auozyptlgtwkzwtwvotx.supabase.co';
@@ -45,6 +45,32 @@ async function apiFetch(endpoint, options = {}) {
 // PROFILES & AUTH
 // -------------------------------------------------------------
 
+function toUserProfile(row) {
+  const metaObj = (row.weight_history || []).find(item => item && item._meta) || {};
+  const cleanWeightHistory = (row.weight_history || []).filter(item => item && !item._meta);
+
+  const cleanHandle = row.username || metaObj.username || (row.name ? row.name.toLowerCase().replace(/[^a-z0-9]/g, '') : 'atleta');
+
+  return {
+    id: row.id,
+    name: row.name,
+    username: cleanHandle,
+    email: row.email,
+    passwordHash: row.password_hash,
+    salt: row.salt,
+    profile: {
+      currentWeight: row.current_weight !== null ? parseFloat(row.current_weight) : null,
+      height: row.height !== null ? parseFloat(row.height) : null,
+      goal: row.goal || 'Hipertrofia',
+      experienceLevel: row.experience_level || 'Intermediário',
+      weightHistory: cleanWeightHistory,
+      avatarUrl: row.avatar_url || metaObj.avatarUrl || null,
+      bio: row.bio || metaObj.bio || '',
+      following: Array.isArray(row.following) ? row.following : (metaObj.following || [])
+    }
+  };
+}
+
 async function getProfileByEmail(email) {
   const normalized = email.trim().toLowerCase();
   const rows = await apiFetch(`profiles?email=eq.${encodeURIComponent(normalized)}&select=*`);
@@ -59,8 +85,17 @@ async function getProfileById(id) {
 }
 
 async function createProfile(userData) {
+  const defaultUsername = userData.username || (userData.name ? userData.name.toLowerCase().replace(/[^a-z0-9]/g, '') : 'atleta');
+  const metaObj = {
+    _meta: true,
+    username: defaultUsername,
+    bio: userData.profile?.bio || '',
+    avatarUrl: userData.profile?.avatarUrl || null,
+    following: []
+  };
+
   const payload = {
-    id: userData.id,
+    id: userData.id || ('usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7)),
     name: userData.name,
     email: userData.email.trim().toLowerCase(),
     password_hash: userData.passwordHash,
@@ -69,7 +104,7 @@ async function createProfile(userData) {
     height: userData.profile?.height || null,
     goal: userData.profile?.goal || 'Hipertrofia',
     experience_level: userData.profile?.experienceLevel || 'Intermediário',
-    weight_history: userData.profile?.weightHistory || []
+    weight_history: [metaObj]
   };
 
   const rows = await apiFetch('profiles', {
@@ -82,13 +117,34 @@ async function createProfile(userData) {
 }
 
 async function updateProfile(id, updates) {
-  const payload = {};
+  const existing = await getProfileById(id);
+  const existingMeta = (existing && existing.profile) ? {
+    username: existing.username,
+    bio: existing.profile.bio,
+    avatarUrl: existing.profile.avatarUrl,
+    following: existing.profile.following
+  } : {};
+
+  const updatedMeta = {
+    _meta: true,
+    username: updates.username !== undefined ? updates.username.toLowerCase().replace(/[^a-z0-9_]/g, '') : (existingMeta.username || 'atleta'),
+    bio: updates.bio !== undefined ? updates.bio : (existingMeta.bio || ''),
+    avatarUrl: updates.avatarUrl !== undefined ? updates.avatarUrl : (existingMeta.avatarUrl || null),
+    following: updates.following !== undefined ? updates.following : (existingMeta.following || [])
+  };
+
+  const cleanWeights = updates.weightHistory || (existing && existing.profile ? existing.profile.weightHistory : []) || [];
+  const mergedHistory = [...cleanWeights.filter(w => !w._meta), updatedMeta];
+
+  const payload = {
+    weight_history: mergedHistory
+  };
+
   if (updates.name) payload.name = updates.name.trim();
   if (updates.goal) payload.goal = updates.goal;
   if (updates.height !== undefined) payload.height = updates.height;
   if (updates.experienceLevel) payload.experience_level = updates.experienceLevel;
   if (updates.currentWeight !== undefined) payload.current_weight = updates.currentWeight;
-  if (updates.weightHistory) payload.weight_history = updates.weightHistory;
 
   const rows = await apiFetch(`profiles?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -97,23 +153,6 @@ async function updateProfile(id, updates) {
   });
 
   return rows && rows[0] ? toUserProfile(rows[0]) : null;
-}
-
-function toUserProfile(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    passwordHash: row.password_hash,
-    salt: row.salt,
-    profile: {
-      currentWeight: row.current_weight !== null ? parseFloat(row.current_weight) : null,
-      height: row.height !== null ? parseFloat(row.height) : null,
-      goal: row.goal || 'Hipertrofia',
-      experienceLevel: row.experience_level || 'Intermediário',
-      weightHistory: row.weight_history || []
-    }
-  };
 }
 
 // -------------------------------------------------------------
@@ -140,11 +179,150 @@ async function deleteSession(token) {
 }
 
 // -------------------------------------------------------------
+// SOCIAL: SEARCH & FOLLOWS
+// -------------------------------------------------------------
+
+async function searchUsers(rawQuery, currentUserId) {
+  const q = (rawQuery || '').replace(/^@+/, '').trim().toLowerCase();
+  if (!q) return [];
+
+  const rows = await apiFetch('profiles?select=*&limit=50');
+  const me = await getProfileById(currentUserId);
+  const myFollowing = me?.profile?.following || [];
+
+  const results = [];
+  for (const row of rows || []) {
+    if (row.id === currentUserId) continue;
+    const user = toUserProfile(row);
+    const matchesName = (user.name || '').toLowerCase().includes(q);
+    const matchesHandle = (user.username || '').toLowerCase().includes(q);
+
+    if (matchesName || matchesHandle) {
+      results.push({
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        avatarUrl: user.profile.avatarUrl,
+        bio: user.profile.bio,
+        isFollowing: myFollowing.includes(user.id)
+      });
+    }
+  }
+
+  return results.slice(0, 10);
+}
+
+async function toggleFollow(followerId, targetUserId) {
+  const me = await getProfileById(followerId);
+  if (!me) throw new Error('Usuário não encontrado');
+
+  const currentFollowing = me.profile.following || [];
+  let isFollowing = false;
+  let updatedFollowing = [];
+
+  if (currentFollowing.includes(targetUserId)) {
+    updatedFollowing = currentFollowing.filter(id => id !== targetUserId);
+    isFollowing = false;
+  } else {
+    updatedFollowing = [...currentFollowing, targetUserId];
+    isFollowing = true;
+  }
+
+  await updateProfile(followerId, { following: updatedFollowing });
+
+  return { isFollowing, following: updatedFollowing };
+}
+
+// -------------------------------------------------------------
+// SOCIAL: FEED & LIKES
+// -------------------------------------------------------------
+
+async function getFeedForUser(userId) {
+  const me = await getProfileById(userId);
+  if (!me) return [];
+
+  const following = me.profile.following || [];
+  if (following.length === 0) return [];
+
+  // Fetch all history from followed users
+  const rows = await apiFetch('history?select=*&order=created_at.desc&limit=100');
+  const followedHistory = (rows || []).filter(h => following.includes(h.user_id));
+
+  // Map author info & likes
+  const profilesCache = {};
+  const feedItems = [];
+
+  for (const h of followedHistory) {
+    if (!profilesCache[h.user_id]) {
+      profilesCache[h.user_id] = await getProfileById(h.user_id);
+    }
+    const author = profilesCache[h.user_id];
+    if (!author) continue;
+
+    const rawExercises = h.exercises || [];
+    const metaObj = rawExercises.find(e => e && e._meta) || {};
+    const cleanExercises = rawExercises.filter(e => !e._meta);
+    const likes = metaObj.likes || [];
+
+    feedItems.push({
+      id: h.id,
+      userId: h.user_id,
+      authorName: author.name,
+      authorUsername: author.username,
+      authorAvatarUrl: author.profile?.avatarUrl || null,
+      authorBio: author.profile?.bio || '',
+      routineName: h.routine_name || 'Treino',
+      date: h.date,
+      durationSeconds: h.duration_seconds || 0,
+      exercises: cleanExercises,
+      likes: likes,
+      likesCount: likes.length,
+      isLiked: likes.includes(userId)
+    });
+  }
+
+  // Sort newest first
+  feedItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return feedItems;
+}
+
+async function toggleLikeWorkout(userId, workoutId) {
+  const rows = await apiFetch(`history?id=eq.${encodeURIComponent(workoutId)}&select=*`);
+  if (!rows || rows.length === 0) throw new Error('Treino não encontrado');
+
+  const h = rows[0];
+  const rawExercises = h.exercises || [];
+  let metaObj = rawExercises.find(e => e && e._meta);
+
+  if (!metaObj) {
+    metaObj = { _meta: true, likes: [] };
+    rawExercises.push(metaObj);
+  }
+
+  metaObj.likes = Array.isArray(metaObj.likes) ? metaObj.likes : [];
+  let isLiked = false;
+
+  if (metaObj.likes.includes(userId)) {
+    metaObj.likes = metaObj.likes.filter(id => id !== userId);
+    isLiked = false;
+  } else {
+    metaObj.likes.push(userId);
+    isLiked = true;
+  }
+
+  await apiFetch(`history?id=eq.${encodeURIComponent(workoutId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ exercises: rawExercises })
+  });
+
+  return { isLiked, likesCount: metaObj.likes.length };
+}
+
+// -------------------------------------------------------------
 // EXERCISES
 // -------------------------------------------------------------
 
 async function getExercisesForUser(userId) {
-  // Query all base exercises + user's custom exercises
   let query = 'exercises?select=*';
   if (userId) {
     query += `&or=(is_base.eq.true,user_id.is.null,user_id.eq.${encodeURIComponent(userId)})`;
@@ -170,12 +348,10 @@ async function getExercisesForUser(userId) {
 async function syncUserExercises(userId, exercises) {
   if (!Array.isArray(exercises)) return;
 
-  // 1. Delete previous custom exercises of this user
   await apiFetch(`exercises?user_id=eq.${encodeURIComponent(userId)}&is_base=eq.false`, {
     method: 'DELETE'
   });
 
-  // 2. Insert new custom exercises
   const custom = exercises.filter(e => !e.isBase).map(e => ({
     id: e.id,
     user_id: userId,
@@ -204,7 +380,6 @@ async function syncUserExercises(userId, exercises) {
 async function getRoutinesForUser(userId) {
   if (!userId) return { userRoutines: [], sharedRoutines: [] };
 
-  // Fetch all routines
   const rows = await apiFetch('routines?select=*');
   const allRoutines = (rows || []).map(r => ({
     id: r.id,
@@ -226,12 +401,10 @@ async function getRoutinesForUser(userId) {
 async function syncUserRoutines(userId, routines, authorName) {
   if (!Array.isArray(routines)) return;
 
-  // 1. Delete previous routines of this user
   await apiFetch(`routines?user_id=eq.${encodeURIComponent(userId)}`, {
     method: 'DELETE'
   });
 
-  // 2. Insert updated routines
   const toInsert = routines.map(r => ({
     id: r.id,
     user_id: userId,
@@ -292,35 +465,51 @@ async function cloneRoutine(userId, routineId, authorName) {
 async function getHistoryForUser(userId) {
   if (!userId) return [];
   const rows = await apiFetch(`history?user_id=eq.${encodeURIComponent(userId)}&select=*&order=created_at.asc`);
-  return (rows || []).map(r => ({
-    id: r.id,
-    userId: r.user_id,
-    routineId: r.routine_id,
-    routineName: r.routine_name,
-    date: r.date,
-    durationSeconds: r.duration_seconds,
-    exercises: r.exercises || []
-  }));
+  return (rows || []).map(r => {
+    const rawExercises = r.exercises || [];
+    const cleanExercises = rawExercises.filter(e => !e._meta);
+    return {
+      id: r.id,
+      userId: r.user_id,
+      routineId: r.routine_id,
+      routineName: r.routine_name,
+      date: r.date,
+      durationSeconds: r.duration_seconds,
+      exercises: cleanExercises
+    };
+  });
 }
 
 async function syncUserHistory(userId, historyList) {
   if (!Array.isArray(historyList)) return;
 
-  // 1. Delete previous history of this user
+  // Preserve existing _meta with likes if already present
+  const existingRows = await apiFetch(`history?user_id=eq.${encodeURIComponent(userId)}&select=id,exercises`);
+  const likesMap = {};
+  for (const row of existingRows || []) {
+    const m = (row.exercises || []).find(e => e && e._meta);
+    if (m && m.likes) likesMap[row.id] = m.likes;
+  }
+
   await apiFetch(`history?user_id=eq.${encodeURIComponent(userId)}`, {
     method: 'DELETE'
   });
 
-  // 2. Insert updated history
-  const toInsert = historyList.map(h => ({
-    id: h.id || ('hist_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
-    user_id: userId,
-    routine_id: h.routineId || null,
-    routine_name: h.routineName || 'Treino',
-    date: h.date,
-    duration_seconds: h.durationSeconds || 0,
-    exercises: h.exercises || []
-  }));
+  const toInsert = historyList.map(h => {
+    const cleanExercises = (h.exercises || []).filter(e => !e._meta);
+    const existingLikes = likesMap[h.id] || [];
+    cleanExercises.push({ _meta: true, likes: existingLikes });
+
+    return {
+      id: h.id || ('hist_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+      user_id: userId,
+      routine_id: h.routineId || null,
+      routine_name: h.routineName || 'Treino',
+      date: h.date,
+      duration_seconds: h.durationSeconds || 0,
+      exercises: cleanExercises
+    };
+  });
 
   if (toInsert.length > 0) {
     await apiFetch('history', {
@@ -338,6 +527,10 @@ module.exports = {
   createSession,
   getSessionUserId,
   deleteSession,
+  searchUsers,
+  toggleFollow,
+  getFeedForUser,
+  toggleLikeWorkout,
   getExercisesForUser,
   syncUserExercises,
   getRoutinesForUser,

@@ -347,21 +347,119 @@ async function handleLogout() {
 function updateUserUIHeader() {
   if (!currentUser) return;
   const initials = getInitials(currentUser.name);
+  const avatarUrl = currentUser.profile?.avatarUrl;
 
+  // Header Avatar & Initials
+  const headerAvatarImg = document.getElementById('headerUserAvatarImg');
   const headerInitials = document.getElementById('headerUserInitials');
   const headerName = document.getElementById('headerUserName');
-  if (headerInitials) headerInitials.innerText = initials;
+
+  if (avatarUrl && headerAvatarImg) {
+    headerAvatarImg.src = avatarUrl;
+    headerAvatarImg.classList.remove('hidden');
+    if (headerInitials) headerInitials.classList.add('hidden');
+  } else {
+    if (headerAvatarImg) headerAvatarImg.classList.add('hidden');
+    if (headerInitials) {
+      headerInitials.innerText = initials;
+      headerInitials.classList.remove('hidden');
+    }
+  }
   if (headerName) headerName.innerText = currentUser.name.split(' ')[0];
 
   // Drawer Profile info
-  const drawerAvatar = document.getElementById('drawerAvatar');
+  const drawerAvatarImg = document.getElementById('drawerAvatarImg');
+  const drawerAvatarInitials = document.getElementById('drawerAvatarInitials');
   const drawerName = document.getElementById('drawerUserName');
+  const drawerHandle = document.getElementById('drawerUserHandle');
   const drawerEmail = document.getElementById('drawerUserEmail');
-  if (drawerAvatar) drawerAvatar.innerText = initials;
+
+  if (avatarUrl && drawerAvatarImg) {
+    drawerAvatarImg.src = avatarUrl;
+    drawerAvatarImg.classList.remove('hidden');
+    if (drawerAvatarInitials) drawerAvatarInitials.classList.add('hidden');
+  } else {
+    if (drawerAvatarImg) drawerAvatarImg.classList.add('hidden');
+    if (drawerAvatarInitials) {
+      drawerAvatarInitials.innerText = initials;
+      drawerAvatarInitials.classList.remove('hidden');
+    }
+  }
+
   if (drawerName) drawerName.innerText = currentUser.name;
+  if (drawerHandle) {
+    const handle = currentUser.username || currentUser.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    drawerHandle.innerText = `@${handle}`;
+  }
   if (drawerEmail) drawerEmail.innerText = currentUser.email;
 
   updateProfileCharacteristicsDisplay();
+  initLucide();
+}
+
+async function handleProfilePhotoUpload(e) {
+  const file = e.target?.files?.[0];
+  if (!file) return;
+
+  if (!file.type.startsWith('image/')) {
+    showToast('Por favor, selecione um arquivo de imagem válido.', 'warning');
+    return;
+  }
+
+  try {
+    showToast('Processando foto de perfil...');
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+      const img = new Image();
+      img.onload = async function() {
+        // Resize and center-crop to square 256x256
+        const canvas = document.createElement('canvas');
+        const targetSize = 256;
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+        const ctx = canvas.getContext('2d');
+
+        const minDim = Math.min(img.width, img.height);
+        const sx = (img.width - minDim) / 2;
+        const sy = (img.height - minDim) / 2;
+
+        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, targetSize, targetSize);
+        const base64Data = canvas.toDataURL('image/jpeg', 0.85);
+
+        try {
+          const res = await fetch('/api/user/profile', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ avatarUrl: base64Data })
+          });
+
+          const data = await res.json();
+          if (res.ok) {
+            if (data.user) {
+              currentUser = data.user;
+            } else if (currentUser.profile) {
+              currentUser.profile.avatarUrl = base64Data;
+            }
+            updateUserUIHeader();
+            showToast('Foto de perfil atualizada com sucesso!');
+          } else {
+            showToast(data.error || 'Erro ao salvar foto de perfil.', 'warning');
+          }
+        } catch (err) {
+          console.error('Erro ao enviar avatar:', err);
+          showToast('Erro de conexão ao salvar foto de perfil.', 'danger');
+        }
+      };
+      img.src = evt.target.result;
+    };
+    reader.readAsDataURL(file);
+  } catch (err) {
+    console.error('Erro ao ler imagem:', err);
+    showToast('Erro ao carregar arquivo de imagem.', 'danger');
+  }
 }
 
 function getInitials(name) {
@@ -410,11 +508,34 @@ function updateProfileCharacteristicsDisplay() {
   document.getElementById('drawerGoalVal').innerText = prof.goal || 'Hipertrofia';
   document.getElementById('drawerLevelVal').innerText = prof.experienceLevel || 'Intermediário';
 
+  // Biografia
+  const bioEl = document.getElementById('drawerUserBio');
+  if (bioEl) {
+    if (prof.bio && prof.bio.trim()) {
+      bioEl.innerText = prof.bio.trim();
+      bioEl.classList.remove('italic', 'text-zinc-400');
+      bioEl.classList.add('text-zinc-200');
+    } else {
+      bioEl.innerText = 'Nenhuma biografia adicionada ainda.';
+      bioEl.classList.add('italic', 'text-zinc-400');
+      bioEl.classList.remove('text-zinc-200');
+    }
+  }
+
   // Fill in edit inputs
-  document.getElementById('editNameInput').value = currentUser.name || '';
-  document.getElementById('editHeightInput').value = prof.height || '';
-  document.getElementById('editGoalInput').value = prof.goal || 'Hipertrofia';
-  document.getElementById('editLevelInput').value = prof.experienceLevel || 'Intermediário';
+  const editName = document.getElementById('editNameInput');
+  const editUsername = document.getElementById('editUsernameInput');
+  const editBio = document.getElementById('editBioInput');
+  const editHeight = document.getElementById('editHeightInput');
+  const editGoal = document.getElementById('editGoalInput');
+  const editLevel = document.getElementById('editLevelInput');
+
+  if (editName) editName.value = currentUser.name || '';
+  if (editUsername) editUsername.value = currentUser.username || '';
+  if (editBio) editBio.value = prof.bio || '';
+  if (editHeight) editHeight.value = prof.height || '';
+  if (editGoal) editGoal.value = prof.goal || 'Hipertrofia';
+  if (editLevel) editLevel.value = prof.experienceLevel || 'Intermediário';
 }
 
 function toggleEditProfileForm() {
@@ -432,6 +553,8 @@ function toggleEditProfileForm() {
 async function handleUpdateProfile(e) {
   e.preventDefault();
   const name = document.getElementById('editNameInput').value.trim();
+  const username = document.getElementById('editUsernameInput').value.trim();
+  const bio = document.getElementById('editBioInput').value.trim();
   const height = document.getElementById('editHeightInput').value;
   const goal = document.getElementById('editGoalInput').value;
   const experienceLevel = document.getElementById('editLevelInput').value;
@@ -443,13 +566,22 @@ async function handleUpdateProfile(e) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${authToken}`
       },
-      body: JSON.stringify({ name, height, goal, experienceLevel })
+      body: JSON.stringify({ name, username, bio, height, goal, experienceLevel })
     });
 
     const data = await res.json();
     if (res.ok) {
-      currentUser.name = data.name;
-      currentUser.profile = data.profile;
+      if (data.user) {
+        currentUser = data.user;
+      } else {
+        currentUser.name = data.name || name;
+        if (!currentUser.profile) currentUser.profile = {};
+        currentUser.username = data.username || username;
+        currentUser.profile.bio = bio;
+        currentUser.profile.height = height ? parseFloat(height) : null;
+        currentUser.profile.goal = goal;
+        currentUser.profile.experienceLevel = experienceLevel;
+      }
       updateUserUIHeader();
       toggleEditProfileForm();
       checkProfilePromptBanner();
@@ -774,7 +906,7 @@ function switchTab(tabName, immediate = false) {
     deskActive.classList.remove('border-transparent', 'text-zinc-400');
   }
 
-  ['workout', 'routines', 'exercises', 'history'].forEach(t => {
+  ['workout', 'routines', 'exercises', 'history', 'feed'].forEach(t => {
     const mobBtn = document.getElementById(`mob-tab-${t}`);
     if (mobBtn) {
       if (t === tabName) {
@@ -850,6 +982,7 @@ function renderTabContent(tabName) {
     populateHistoryExerciseSelect();
   }
   if (tabName === 'workout') renderWorkoutTab();
+  if (tabName === 'feed') renderFeedTab();
 }
 
 function renderAllViews() {
@@ -2567,5 +2700,361 @@ function formatDate(isoStr) {
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   } catch (e) {
     return isoStr;
+  }
+}
+
+function formatRelativeTime(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const diffMs = Date.now() - new Date(isoStr).getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return 'Agora';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `Há ${diffMin} min`;
+    const diffHours = Math.floor(diffMin / 60);
+    if (diffHours < 24) return `Há ${diffHours} h`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `Há ${diffDays} d`;
+    return formatDate(isoStr).split(' ')[0];
+  } catch (e) {
+    return formatDate(isoStr);
+  }
+}
+
+// -------------------------------------------------------------
+// SOCIAL FEED & ATHLETE DISCOVERY LOGIC
+// -------------------------------------------------------------
+
+let feedSearchDebounceTimer = null;
+let currentFeedData = [];
+let expandedFeedExercises = new Set();
+
+function handleSearchAthletes(query) {
+  const container = document.getElementById('feedSearchResults');
+  if (!container) return;
+
+  if (feedSearchDebounceTimer) {
+    clearTimeout(feedSearchDebounceTimer);
+  }
+
+  const cleanQuery = query.trim().replace(/^@/, '');
+  if (!cleanQuery) {
+    container.innerHTML = '';
+    container.classList.add('hidden');
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.innerHTML = `
+    <div class="flex items-center gap-2 py-3 text-xs text-zinc-400">
+      <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-zinc-300"></i>
+      <span>Buscando atletas...</span>
+    </div>
+  `;
+  initLucide();
+
+  feedSearchDebounceTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(`/api/users/search?q=${encodeURIComponent(cleanQuery)}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      const users = data.users || [];
+
+      if (users.length === 0) {
+        container.innerHTML = `
+          <div class="py-3 text-center text-xs text-zinc-500">
+            Nenhum atleta encontrado para "<span class="text-zinc-300 font-mono">@${escapeHtml(cleanQuery)}</span>".
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = users.map(u => {
+        const initials = getInitials(u.name);
+        const handle = u.username ? `@${escapeHtml(u.username)}` : `@${escapeHtml(u.name.toLowerCase().replace(/\s+/g, ''))}`;
+        const avatarHtml = u.avatarUrl
+          ? `<img src="${u.avatarUrl}" alt="${escapeHtml(u.name)}" class="w-10 h-10 rounded-xl object-cover border border-zinc-700" />`
+          : `<div class="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
+
+        const bioHtml = u.bio ? `<p class="text-[11px] text-zinc-400 truncate mt-0.5">${escapeHtml(u.bio)}</p>` : '';
+
+        const followBtnHtml = u.isFollowing
+          ? `<button onclick="toggleFollowAthlete('${u.id}', '${escapeHtml(u.name)}')" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-zinc-850 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 flex items-center gap-1.5 transition-all">
+               <i data-lucide="user-check" class="w-3.5 h-3.5 text-zinc-300"></i> Seguindo
+             </button>`
+          : `<button onclick="toggleFollowAthlete('${u.id}', '${escapeHtml(u.name)}')" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-zinc-100 hover:bg-white text-zinc-950 flex items-center gap-1.5 transition-all shadow-sm">
+               <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> Seguir
+             </button>`;
+
+        return `
+          <div class="card-opaque-subtle rounded-2xl p-3 border border-zinc-800 flex items-center justify-between gap-3">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              ${avatarHtml}
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <h4 class="text-xs font-bold text-white truncate">${escapeHtml(u.name)}</h4>
+                  <span class="text-[10px] text-zinc-500 font-mono">${handle}</span>
+                </div>
+                ${bioHtml}
+              </div>
+            </div>
+            <div class="shrink-0">
+              ${followBtnHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      initLucide();
+    } catch (e) {
+      console.error('Erro ao buscar atletas:', e);
+      container.innerHTML = `<div class="py-2 text-xs text-red-400">Erro ao buscar atletas. Tente novamente.</div>`;
+    }
+  }, 300);
+}
+
+async function toggleFollowAthlete(targetUserId, targetName) {
+  try {
+    const res = await fetch('/api/users/follow', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ targetUserId })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      if (currentUser?.profile) {
+        currentUser.profile.following = data.following || [];
+      }
+      showToast(data.isFollowing ? `Você começou a seguir ${targetName}!` : `Você deixou de seguir ${targetName}.`);
+
+      // Refresh current search results and feed
+      const searchInput = document.getElementById('feedSearchInput');
+      if (searchInput && searchInput.value.trim()) {
+        handleSearchAthletes(searchInput.value);
+      }
+      renderFeedTab(true);
+    } else {
+      showToast(data.error || 'Erro ao seguir atleta.', 'warning');
+    }
+  } catch (e) {
+    console.error('Erro ao seguir atleta:', e);
+    showToast('Erro de conexão ao seguir atleta.', 'danger');
+  }
+}
+
+async function renderFeedTab(force = false) {
+  const container = document.getElementById('feedTimelineList');
+  if (!container) return;
+
+  try {
+    const res = await fetch('/api/feed', {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+
+    if (!res.ok) {
+      container.innerHTML = `<p class="text-xs text-zinc-500 text-center py-6">Não foi possível carregar o feed no momento.</p>`;
+      return;
+    }
+
+    const data = await res.json();
+    currentFeedData = data.feed || [];
+
+    if (currentFeedData.length === 0) {
+      container.innerHTML = `
+        <div class="card-opaque rounded-3xl p-8 border border-zinc-800 text-center space-y-3.5 shadow-xl">
+          <div class="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-700/80 flex items-center justify-center text-zinc-400 mx-auto">
+            <i data-lucide="users" class="w-6 h-6"></i>
+          </div>
+          <div>
+            <h4 class="text-sm font-bold text-white">Seu feed de treinos está silencioso</h4>
+            <p class="text-xs text-zinc-400 max-w-sm mx-auto mt-1 leading-relaxed">
+              Você ainda não segue nenhum atleta ou quem você segue ainda não registrou treinos.
+              Use a busca acima para encontrar e seguir seus amigos pelo @nome de usuário!
+            </p>
+          </div>
+        </div>
+      `;
+      initLucide();
+      return;
+    }
+
+    container.innerHTML = currentFeedData.map(item => {
+      const initials = getInitials(item.authorName);
+      const handle = item.authorUsername ? `@${escapeHtml(item.authorUsername)}` : '';
+      const avatarHtml = item.authorAvatarUrl
+        ? `<img src="${item.authorAvatarUrl}" alt="${escapeHtml(item.authorName)}" class="w-10 h-10 rounded-xl object-cover border border-zinc-700" />`
+        : `<div class="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
+
+      // Calculate total volume & total sets
+      let totalVolume = 0;
+      let totalSets = 0;
+      (item.exercises || []).forEach(ex => {
+        (ex.sets || []).forEach(s => {
+          totalSets++;
+          totalVolume += (parseFloat(s.weightKg) || 0) * (parseInt(s.reps, 10) || 0);
+        });
+      });
+
+      const isExpanded = expandedFeedExercises.has(item.id);
+
+      // Exercise summary list
+      const exercisesListHtml = (item.exercises || []).map(ex => {
+        const setsCount = (ex.sets || []).length;
+        const maxWeight = Math.max(0, ...(ex.sets || []).map(s => parseFloat(s.weightKg) || 0));
+        const maxPse = Math.max(0, ...(ex.sets || []).map(s => parseFloat(s.pse) || 0));
+
+        let detailedSetsHtml = '';
+        if (isExpanded) {
+          detailedSetsHtml = `
+            <div class="mt-2 space-y-1 pl-3 border-l border-zinc-800 text-[11px] font-mono text-zinc-400">
+              ${(ex.sets || []).map((s, idx) => `
+                <div class="flex items-center justify-between">
+                  <span>Série ${idx + 1}: ${s.reps || 0} reps @ ${s.weightKg || 0} kg</span>
+                  <span class="text-zinc-500">PSE ${s.pse || '--'}</span>
+                </div>
+              `).join('')}
+            </div>
+          `;
+        }
+
+        return `
+          <div class="p-2.5 rounded-xl bg-zinc-900/60 border border-zinc-850">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-semibold text-zinc-200">${escapeHtml(ex.name)}</span>
+              <div class="flex items-center gap-2 text-[11px] font-mono text-zinc-400">
+                <span>${setsCount} séries</span>
+                ${maxWeight > 0 ? `<span class="text-white font-bold">• até ${maxWeight} kg</span>` : ''}
+                ${maxPse > 0 ? `<span class="text-zinc-500">(PSE ${maxPse})</span>` : ''}
+              </div>
+            </div>
+            ${detailedSetsHtml}
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <article class="card-opaque rounded-3xl p-5 border border-zinc-800 shadow-xl space-y-4 fade-in">
+          <!-- Card Header: Author & Date -->
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 min-w-0">
+              ${avatarHtml}
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="text-xs font-bold text-white truncate">${escapeHtml(item.authorName)}</span>
+                  ${handle ? `<span class="text-[10px] text-zinc-500 font-mono">${handle}</span>` : ''}
+                </div>
+                <div class="flex items-center gap-1 text-[11px] text-zinc-400 mt-0.5">
+                  <i data-lucide="dumbbell" class="w-3 h-3 text-zinc-500"></i>
+                  <span class="font-medium text-zinc-300 truncate">${escapeHtml(item.routineName)}</span>
+                </div>
+              </div>
+            </div>
+            <span class="text-[11px] text-zinc-500 font-mono shrink-0">${formatRelativeTime(item.date)}</span>
+          </div>
+
+          <!-- Workout Metrics Badges -->
+          <div class="flex flex-wrap gap-2 text-xs">
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium">
+              <i data-lucide="clock" class="w-3.5 h-3.5 text-zinc-400"></i>
+              <span>${Math.round((item.durationSeconds || 0) / 60)} min</span>
+            </div>
+            <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium">
+              <i data-lucide="layers" class="w-3.5 h-3.5 text-zinc-400"></i>
+              <span>${totalSets} séries</span>
+            </div>
+            ${totalVolume > 0 ? `
+              <div class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-zinc-400"></i>
+                <span class="font-mono">${totalVolume.toLocaleString('pt-BR')} kg volume</span>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- Exercises List -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-[11px] uppercase font-bold text-zinc-500 px-1">
+              <span>Exercícios do Treino (${(item.exercises || []).length})</span>
+              <button onclick="toggleFeedItemExercises('${item.id}')" class="text-zinc-400 hover:text-white flex items-center gap-1 lowercase font-normal">
+                ${isExpanded ? 'recolher detalhes' : 'ver séries detalhadas'}
+                <i data-lucide="${isExpanded ? 'chevron-up' : 'chevron-down'}" class="w-3 h-3"></i>
+              </button>
+            </div>
+            ${exercisesListHtml}
+          </div>
+
+          <!-- Card Footer: Like Button & Interactive -->
+          <div class="pt-3 border-t border-zinc-800/80 flex items-center justify-between">
+            <button
+              id="like-btn-${item.id}"
+              onclick="toggleLikeFeedWorkout('${item.id}', this)"
+              class="flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all ${
+                item.isLiked
+                  ? 'bg-zinc-100 text-zinc-950 font-bold border-white shadow-sm'
+                  : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750 font-semibold'
+              }"
+            >
+              <i data-lucide="thumbs-up" class="w-3.5 h-3.5 ${item.isLiked ? 'fill-current' : ''}"></i>
+              <span class="like-label">${item.isLiked ? 'Curtiu' : 'Curtir'}</span>
+              <span class="like-count font-mono font-bold">${item.likesCount || 0}</span>
+            </button>
+
+            <span class="text-[10px] text-zinc-500 font-mono">${formatDate(item.date).split(' ')[0]}</span>
+          </div>
+        </article>
+      `;
+    }).join('');
+
+    initLucide();
+  } catch (e) {
+    console.error('Erro ao renderizar feed:', e);
+    container.innerHTML = `<p class="text-xs text-red-400 text-center py-6">Erro ao carregar feed social.</p>`;
+  }
+}
+
+function toggleFeedItemExercises(workoutId) {
+  if (expandedFeedExercises.has(workoutId)) {
+    expandedFeedExercises.delete(workoutId);
+  } else {
+    expandedFeedExercises.add(workoutId);
+  }
+  renderFeedTab(true);
+}
+
+async function toggleLikeFeedWorkout(workoutId, btnEl) {
+  try {
+    const res = await fetch('/api/history/like', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ workoutId })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      const countEl = btnEl.querySelector('.like-count');
+      const labelEl = btnEl.querySelector('.like-label');
+
+      if (data.isLiked) {
+        btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-100 text-zinc-950 font-bold border-white shadow-sm';
+        if (labelEl) labelEl.innerText = 'Curtiu';
+      } else {
+        btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750 font-semibold';
+        if (labelEl) labelEl.innerText = 'Curtir';
+      }
+      if (countEl) countEl.innerText = data.likesCount;
+      initLucide();
+    } else {
+      showToast(data.error || 'Erro ao curtir treino.', 'warning');
+    }
+  } catch (e) {
+    console.error('Erro ao curtir treino:', e);
+    showToast('Erro ao registrar curtida.', 'danger');
   }
 }
