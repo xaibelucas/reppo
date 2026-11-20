@@ -3291,13 +3291,13 @@ function backToImportTextInput() {
 
 function inferMuscleFromExerciseName(name) {
   const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (/supino|crucifixo|crossover|cross over|peito|paralela|chest/.test(n)) return 'Peito';
-  if (/puxada|remada|pulldown|pull down|costas|barra fixa|serrote|lat/.test(n)) return 'Costas';
-  if (/agachamento|leg press|extensora|flexora|panturrilha|quadriceps|stiff|hack|afundo|bulgaro|búlgaro|adutora|abdutora|gluteo|glúteo|perna/.test(n)) return 'Pernas';
-  if (/desenvolvimento|elevacao|elevação|lateral|frontal|ombro|deltoide/.test(n)) return 'Ombros';
-  if (/triceps|tríceps|testa|corda|coice|frances|francês/.test(n)) return 'Tríceps';
-  if (/biceps|bíceps|rosca|martelo|scott/.test(n)) return 'Bíceps';
-  if (/abdominal|prancha|infra|crunch|abdomen|abdômen/.test(n)) return 'Abdômen';
+  if (/desenvolvimento|elevacao|lateral|frontal|ombro|deltoide|arnold|militar|trapezio|encolhimento/.test(n)) return 'Ombros';
+  if (/supino|crucifixo|crossover|cross over|peito|paralela|chest|voador|peck deck/.test(n)) return 'Peito';
+  if (/puxada|remada|pulldown|pull down|costas|barra fixa|serrote|\blat\b|\blats\b|dorsal|dorsais|cavalinho/.test(n)) return 'Costas';
+  if (/agachamento|leg press|extensora|flexora|panturrilha|quadriceps|stiff|hack|afundo|bulgaro|adutora|abdutora|gluteo|perna|pelvica|gemeos/.test(n)) return 'Pernas';
+  if (/triceps|testa|corda|coice|frances/.test(n)) return 'Tríceps';
+  if (/biceps|rosca|martelo|scott/.test(n)) return 'Bíceps';
+  if (/abdominal|prancha|infra|crunch|abdomen/.test(n)) return 'Abdômen';
   return 'Outros';
 }
 
@@ -3311,9 +3311,13 @@ function parseRoutineText(rawText) {
   const firstLine = lines[0].replace(/^[\d+.\-*•\s)]+/, '').trim();
   const hasSetsReps = /(?:\d+\s*(?:x|X|×|séries?|series?|reps?)\s*\d*)/i.test(firstLine);
   if (!hasSetsReps || /treino|ficha|rotina|workout|divisao|divisão|dia\s+[a-z]/i.test(firstLine)) {
-    routineName = firstLine.replace(/[:\-–—\s]+$/, '').trim() || 'Treino Importado';
+    routineName = firstLine.replace(/[-:\s–—]+$/, '').trim() || 'Treino Importado';
     startIndex = 1;
   }
+
+  // sets x reps pattern supporting ranges with all types of dashes and words
+  // e.g.: "3x8-12", "3x8–12", "3 x 8 a 12", "4 séries de 8-12", "4x10"
+  const setsRepsRegex = /[-:\s–—]*\b(\d+)\s*(?:x|X|×|séries?|series?)\s*(?:de\s*)?(\d+(?:\s*(?:[-–—~]|\u2013|\u2014|\u2212|\b(?:a|à|ate|até|to)\b)\s*\d+)?)(?:\s*(?:reps?|repetições?))?/i;
 
   const items = [];
   for (let i = startIndex; i < lines.length; i++) {
@@ -3323,25 +3327,20 @@ function parseRoutineText(rawText) {
     let targetSets = 4;
     let targetReps = '10';
 
-    const matchX = line.match(/(?:(\d+)\s*(?:x|X|×)\s*(\d+(?:-\d+)?))/i);
-    const matchSeries = line.match(/(?:(\d+)\s*(?:séries?|series?)\s*(?:de\s*)?(\d+(?:-\d+)?))/i);
-
-    if (matchX) {
-      targetSets = parseInt(matchX[1], 10);
-      targetReps = matchX[2];
-      line = line.replace(matchX[0], '');
-    } else if (matchSeries) {
-      targetSets = parseInt(matchSeries[1], 10);
-      targetReps = matchSeries[2];
-      line = line.replace(matchSeries[0], '');
+    const match = line.match(setsRepsRegex);
+    if (match) {
+      targetSets = parseInt(match[1], 10);
+      targetReps = match[2].replace(/\s*(?:[-–—~]|\u2013|\u2014|\u2212|\b(?:a|à|ate|até|to)\b)\s*/g, '-').trim();
+      line = line.replace(match[0], ' ');
     }
 
     let cleanName = line
-      .replace(/\([^)]*\)/g, '')
       .replace(/:\s*\d+.*$/, '')
       .replace(/\s+\d+\s*(?:kg|kgs|quilos)/i, '')
-      .replace(/^[:\-–—\s]+|[:\-–—\s]+$/g, '')
+      .replace(/^[-:\s–—]+|[-:\s–—]+$/g, '')
       .trim();
+
+    cleanName = cleanName.replace(/\s{2,}/g, ' ');
 
     if (cleanName.length >= 2) {
       items.push({
@@ -3371,11 +3370,21 @@ function processImportedRoutineText() {
   }
 
   currentImportParsedItems = parsed.items.map(item => {
-    const normRaw = item.rawName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const match = (appData.exercises || []).find(ex => {
-      const normEx = ex.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      return normEx === normRaw || normEx.includes(normRaw) || normRaw.includes(normEx);
+    const normRaw = item.rawName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+
+    // 1. Exact match against catalog
+    let match = (appData.exercises || []).find(ex => {
+      const normEx = ex.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      return normEx === normRaw;
     });
+
+    // 2. Substring match only if length >= 6
+    if (!match && normRaw.length >= 6) {
+      match = (appData.exercises || []).find(ex => {
+        const normEx = ex.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        return normEx.includes(normRaw) || normRaw.includes(normEx);
+      });
+    }
 
     if (match) {
       return {
@@ -3475,6 +3484,18 @@ async function saveImportedRoutine() {
         exerciseIds.push(existingInApp.id);
       } else {
         const newId = 'ex_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+
+        let repMin = 8;
+        let repMax = 12;
+        if (typeof item.reps === 'string' && item.reps.includes('-')) {
+          const parts = item.reps.split('-');
+          repMin = parseInt(parts[0], 10) || 8;
+          repMax = parseInt(parts[1], 10) || repMin;
+        } else {
+          repMin = parseInt(item.reps, 10) || 10;
+          repMax = repMin;
+        }
+
         const newEx = {
           id: newId,
           name: item.exerciseName,
@@ -3482,8 +3503,8 @@ async function saveImportedRoutine() {
           equipment: 'Outro',
           machineSettings: '',
           notes: 'Importado por texto',
-          targetRepMin: parseInt(item.reps, 10) || 8,
-          targetRepMax: parseInt(item.reps, 10) || 12
+          targetRepMin: repMin,
+          targetRepMax: repMax
         };
         appData.exercises.push(newEx);
         exerciseIds.push(newId);
