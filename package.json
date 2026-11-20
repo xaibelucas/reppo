@@ -4,8 +4,7 @@
   "description": "Reppo - Minimalist progressive overload, RPE/PSE and workout tracker (PWA mobile-first)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "echo Build OK"
+    "start": "node server.js"
   },
   "keywords": [
     "reppo",
