@@ -1,0 +1,21 @@
+{
+  "name": "reppo",
+  "version": "1.0.0",
+  "description": "Reppo - Minimalist progressive overload, RPE/PSE and workout tracker (PWA mobile-first)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "reppo",
+    "fitness",
+    "workout",
+    "progressive-overload",
+    "rpe",
+    "pse",
+    "pwa",
+    "dark-mode"
+  ],
+  "author": "Lucas Scheibe",
+  "license": "MIT"
+}
