@@ -93,7 +93,10 @@ function initLucide() {
 function initServiceWorker() {
   if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('./sw.js')
-      .then(() => console.log('Service Worker PWA ativo.'))
+      .then((reg) => {
+        if (reg) reg.update();
+        console.log('Service Worker PWA ativo.');
+      })
       .catch(err => console.warn('Service Worker erro:', err));
   }
 }

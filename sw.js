@@ -1,18 +1,19 @@
-// Academia Tracker Service Worker for Offline Functionality
-const CACHE_NAME = 'academia-tracker-v1';
+// Reppo Service Worker with Network-First Strategy for Instant Updates
+const CACHE_NAME = 'reppo-v2.1';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './styles.css',
-  './app.js',
+  './app.js?v=2.0',
   './manifest.json'
 ];
 
 self.addEventListener('install', (e) => {
+  self.skipWaiting();
   e.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
-    }).then(() => self.skipWaiting())
+      return cache.addAll(ASSETS_TO_CACHE).catch(() => {});
+    })
   );
 });
 
@@ -31,7 +32,7 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Pass API calls through to server or offline fallback
+  // Pass API requests directly
   if (e.request.url.includes('/api/')) {
     e.respondWith(
       fetch(e.request).catch(() => {
@@ -43,11 +44,21 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
+  // Network-first strategy for files: Always fetch fresh version from server when online.
+  // Fallback to cache only when completely offline (e.g. gym basement).
   e.respondWith(
-    caches.match(e.request).then((cachedResponse) => {
-      return cachedResponse || fetch(e.request).then((response) => {
-        return response;
-      });
-    }).catch(() => caches.match('./index.html'))
+    fetch(e.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(e.request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        return caches.match(e.request).then((cached) => cached || caches.match('./index.html'));
+      })
   );
 });
