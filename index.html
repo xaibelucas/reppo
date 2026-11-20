@@ -119,6 +119,18 @@
 
         <!-- Quick Actions & User Profile Drawer Button -->
         <div class="flex items-center gap-2">
+          <!-- Offline Status Indicator (visible only when offline) -->
+          <div id="offlineStatusBadge" class="hidden items-center gap-1.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 px-2.5 py-1.5 rounded-xl text-xs font-semibold" title="Você está offline. Seus treinos e anotações estão salvos no celular e sincronizarão automaticamente quando houver conexão.">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <span class="hidden sm:inline">Offline</span>
+          </div>
+
+          <!-- Syncing Indicator (visible while syncing pending items) -->
+          <div id="syncingStatusBadge" class="hidden items-center gap-1.5 bg-zinc-900 border border-zinc-750 text-zinc-300 px-2.5 py-1.5 rounded-xl text-xs font-semibold">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5 animate-spin text-zinc-300"></i>
+            <span class="hidden sm:inline">Sincronizando...</span>
+          </div>
+
           <!-- Active Workout Pill (if active) -->
           <button id="activeWorkoutHeaderBtn" onclick="maximizeActiveWorkout()" class="hidden items-center gap-2 bg-zinc-900/90 border border-zinc-700/80 px-3 py-1.5 rounded-full text-xs font-semibold text-zinc-200 hover:bg-zinc-800 transition-all">
             <span class="w-2 h-2 rounded-full bg-zinc-300 pulse-indicator"></span>
@@ -1650,6 +1662,6 @@
   <div id="toastContainer" class="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
 
   <!-- APP SCRIPT -->
-  <script src="app.js?v=2.5"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>

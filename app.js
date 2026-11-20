@@ -3,6 +3,9 @@
 
 const TOKEN_KEY = 'gym_auth_token_v1';
 const ACTIVE_WORKOUT_KEY = 'academia_tracker_active_session_v1';
+const CACHED_USER_KEY = 'gym_cached_user_v1';
+const CACHED_DATA_KEY = 'gym_cached_data_v1_';
+const SYNC_QUEUE_KEY = 'gym_sync_queue_v1_';
 
 // Global App State
 let authToken = localStorage.getItem(TOKEN_KEY) || null;
@@ -64,9 +67,67 @@ function playTimerBeep() {
 // INITIALIZATION & AUTHENTICATION FLOW
 // -------------------------------------------------------------
 
+function updateOfflineStatusBadge(isOffline) {
+  const badge = document.getElementById('offlineStatusBadge');
+  if (!badge) return;
+  if (isOffline) {
+    badge.classList.remove('hidden');
+    badge.classList.add('flex');
+  } else {
+    badge.classList.add('hidden');
+    badge.classList.remove('flex');
+  }
+}
+
+function updateSyncStatusIndicator(isSyncing) {
+  const badge = document.getElementById('syncingStatusBadge');
+  if (!badge) return;
+  if (isSyncing) {
+    badge.classList.remove('hidden');
+    badge.classList.add('flex');
+  } else {
+    badge.classList.add('hidden');
+    badge.classList.remove('flex');
+  }
+}
+
+function getSyncQueue() {
+  if (!currentUser) return [];
+  try {
+    const str = localStorage.getItem(SYNC_QUEUE_KEY + currentUser.id);
+    return str ? JSON.parse(str) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveSyncQueue(queue) {
+  if (!currentUser) return;
+  localStorage.setItem(SYNC_QUEUE_KEY + currentUser.id, JSON.stringify(queue));
+}
+
+function addToSyncQueue(item) {
+  const queue = getSyncQueue();
+  queue.push(item);
+  saveSyncQueue(queue);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initLucide();
   initServiceWorker();
+
+  // Listen to network status changes
+  window.addEventListener('online', () => {
+    updateOfflineStatusBadge(false);
+    triggerAutoSync();
+  });
+
+  window.addEventListener('offline', () => {
+    updateOfflineStatusBadge(true);
+    showToast('Modo Offline: Seus treinos e anotações serão salvos com segurança no aparelho.', 'warning');
+  });
+
+  updateOfflineStatusBadge(!navigator.onLine);
 
   if (authToken) {
     const verified = await verifySession();
@@ -76,6 +137,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       switchTab('workout');
       await loadUserData();
       checkProfilePromptBanner();
+      if (navigator.onLine) {
+        triggerAutoSync();
+      }
     } else {
       showAuthScreen();
     }
@@ -134,21 +198,68 @@ function switchAuthTab(tab) {
 }
 
 async function verifySession() {
+  if (!authToken) return false;
+
+  const cachedUserStr = localStorage.getItem(CACHED_USER_KEY);
+  let localUser = null;
+  if (cachedUserStr) {
+    try { localUser = JSON.parse(cachedUserStr); } catch (_) {}
+  }
+
+  // If browser is already known to be offline, recover local session immediately
+  if (!navigator.onLine && localUser) {
+    currentUser = localUser;
+    updateUserUIHeader();
+    updateOfflineStatusBadge(true);
+    return true;
+  }
+
   try {
     const res = await fetch('/api/auth/me', {
       headers: { 'Authorization': `Bearer ${authToken}` }
     });
+
     if (res.ok) {
       const data = await res.json();
-      if (data && data.user) {
+      if (data && data.offline) {
+        // Intercepted by Service Worker offline fallback
+        if (localUser) {
+          currentUser = localUser;
+          updateUserUIHeader();
+          updateOfflineStatusBadge(true);
+          return true;
+        }
+      } else if (data && data.user) {
         currentUser = data.user;
+        localStorage.setItem(CACHED_USER_KEY, JSON.stringify(currentUser));
         updateUserUIHeader();
+        updateOfflineStatusBadge(false);
         return true;
       }
+    } else if (res.status === 401 || res.status === 403) {
+      // True unauthorized from server
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(CACHED_USER_KEY);
+      authToken = null;
+      currentUser = null;
+      return false;
     }
   } catch (e) {
-    console.warn('Erro ao verificar sessão:', e);
+    console.warn('Network offline during session check:', e);
+    if (localUser) {
+      currentUser = localUser;
+      updateUserUIHeader();
+      updateOfflineStatusBadge(true);
+      return true;
+    }
   }
+
+  if (localUser) {
+    currentUser = localUser;
+    updateUserUIHeader();
+    return true;
+  }
+
   localStorage.removeItem(TOKEN_KEY);
   authToken = null;
   currentUser = null;
@@ -176,6 +287,7 @@ async function handleLoginSubmit(e) {
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem(TOKEN_KEY, authToken);
+    localStorage.setItem(CACHED_USER_KEY, JSON.stringify(currentUser));
 
     showToast(`Bem-vindo de volta, ${currentUser.name}!`);
     showAppContainer();
@@ -210,6 +322,7 @@ async function handleRegisterSubmit(e) {
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem(TOKEN_KEY, authToken);
+    localStorage.setItem(CACHED_USER_KEY, JSON.stringify(currentUser));
 
     showToast(`Conta criada com sucesso! Bem-vindo, ${currentUser.name}!`);
     showAppContainer();
@@ -339,6 +452,9 @@ async function handleLogout() {
 
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ACTIVE_WORKOUT_KEY);
+  localStorage.removeItem(CACHED_USER_KEY);
+  updateOfflineStatusBadge(false);
+  updateSyncStatusIndicator(false);
   authToken = null;
   currentUser = null;
   activeWorkout = null;
@@ -916,8 +1032,42 @@ let userDataPromise = null;
 async function loadUserData() {
   if (!authToken) return;
 
-  renderAllSkeletons();
+  const cacheKey = currentUser ? CACHED_DATA_KEY + currentUser.id : null;
+  let hasLocalCache = false;
 
+  // 1. Immediately hydrate from local storage (0ms startup)
+  if (cacheKey) {
+    const localDataStr = localStorage.getItem(cacheKey);
+    if (localDataStr) {
+      try {
+        const cached = JSON.parse(localDataStr);
+        if (cached && (cached.exercises || cached.routines || cached.history)) {
+          appData = {
+            exercises: cached.exercises || [],
+            routines: cached.routines || [],
+            sharedRoutines: cached.sharedRoutines || [],
+            history: cached.history || []
+          };
+          hasLocalCache = true;
+          renderAllViews();
+        }
+      } catch (e) {
+        console.warn('Erro ao ler cache local de dados:', e);
+      }
+    }
+  }
+
+  if (!hasLocalCache) {
+    renderAllSkeletons();
+  }
+
+  // If currently offline, we are ready with local cache
+  if (!navigator.onLine) {
+    updateOfflineStatusBadge(true);
+    return;
+  }
+
+  // 2. Fetch fresh data from cloud when online
   userDataPromise = (async () => {
     try {
       const res = await fetch('/api/data', {
@@ -925,16 +1075,47 @@ async function loadUserData() {
       });
       if (res.ok) {
         const json = await res.json();
-        appData = {
-          exercises: json.exercises || [],
-          routines: json.routines || [],
-          sharedRoutines: json.sharedRoutines || [],
-          history: json.history || []
-        };
-        if (json.user) currentUser = json.user;
+        if (!json.offline) {
+          // Merge history keeping any unsynced local workouts
+          const serverHistory = json.history || [];
+          const mergedHistory = [...serverHistory];
+
+          (appData.history || []).forEach(localH => {
+            if (localH.isPendingSync) {
+              if (!mergedHistory.some(sh => sh.id === localH.id)) {
+                mergedHistory.unshift(localH);
+              }
+            }
+          });
+
+          appData = {
+            exercises: json.exercises || appData.exercises || [],
+            routines: json.routines || appData.routines || [],
+            sharedRoutines: json.sharedRoutines || appData.sharedRoutines || [],
+            history: mergedHistory
+          };
+
+          if (json.user) {
+            currentUser = json.user;
+            localStorage.setItem(CACHED_USER_KEY, JSON.stringify(currentUser));
+          }
+
+          if (cacheKey) {
+            localStorage.setItem(cacheKey, JSON.stringify(appData));
+          }
+
+          updateOfflineStatusBadge(false);
+          renderAllViews();
+
+          // If there are unsynced offline workouts, trigger auto-sync!
+          if ((appData.history || []).some(h => h.isPendingSync)) {
+            triggerAutoSync();
+          }
+        }
       }
     } catch (e) {
-      console.warn('Erro ao carregar dados do usuário:', e);
+      console.warn('Não foi possível atualizar dados da nuvem (usando cache local):', e);
+      updateOfflineStatusBadge(true);
     }
   })();
 
@@ -944,8 +1125,22 @@ async function loadUserData() {
 async function saveUserData() {
   if (!authToken) return;
 
+  const cacheKey = currentUser ? CACHED_DATA_KEY + currentUser.id : null;
+  if (cacheKey) {
+    try {
+      localStorage.setItem(cacheKey, JSON.stringify(appData));
+    } catch (err) {
+      console.warn('Erro ao salvar no cache local:', err);
+    }
+  }
+
+  if (!navigator.onLine) {
+    updateOfflineStatusBadge(true);
+    return;
+  }
+
   try {
-    await fetch('/api/save', {
+    const res = await fetch('/api/save', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -953,8 +1148,70 @@ async function saveUserData() {
       },
       body: JSON.stringify(appData)
     });
+
+    if (res.ok) {
+      updateOfflineStatusBadge(false);
+    }
   } catch (e) {
-    console.warn('Erro ao salvar dados:', e);
+    console.warn('Erro ao salvar dados na nuvem:', e);
+    updateOfflineStatusBadge(true);
+  }
+}
+
+let isSyncInProgress = false;
+
+async function triggerAutoSync() {
+  if (!navigator.onLine || !authToken || !currentUser || isSyncInProgress) return;
+
+  const queue = getSyncQueue();
+  const hasPendingHistory = (appData.history || []).some(h => h.isPendingSync);
+
+  if (queue.length === 0 && !hasPendingHistory) {
+    updateOfflineStatusBadge(false);
+    updateSyncStatusIndicator(false);
+    return;
+  }
+
+  isSyncInProgress = true;
+  updateSyncStatusIndicator(true);
+
+  try {
+    const res = await fetch('/api/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify(appData)
+    });
+
+    if (res.ok) {
+      // Mark all pending workouts as synced
+      (appData.history || []).forEach(h => {
+        delete h.isPendingSync;
+      });
+
+      // Clear sync queue
+      saveSyncQueue([]);
+
+      // Update local cache
+      const cacheKey = CACHED_DATA_KEY + currentUser.id;
+      localStorage.setItem(cacheKey, JSON.stringify(appData));
+
+      updateSyncStatusIndicator(false);
+      updateOfflineStatusBadge(false);
+
+      // Re-render UI
+      renderHistoryView();
+      renderWorkoutTab();
+
+      showToast('Conexão restabelecida! Treinos sincronizados na sua conta.', 'success');
+    }
+  } catch (err) {
+    console.warn('Erro durante auto-sync:', err);
+  } finally {
+    isSyncInProgress = false;
+    updateSyncStatusIndicator(false);
   }
 }
 
@@ -1814,6 +2071,7 @@ async function saveAndFinishWorkout() {
   if (!activeWorkout) return;
 
   const elapsedSec = Math.floor((Date.now() - activeWorkout.startTime) / 1000);
+  const isCurrentlyOffline = !navigator.onLine;
 
   const finishedSession = {
     id: 'wo_' + Date.now(),
@@ -1821,6 +2079,7 @@ async function saveAndFinishWorkout() {
     routineName: activeWorkout.title,
     date: new Date().toISOString(),
     durationSeconds: elapsedSec,
+    isPendingSync: isCurrentlyOffline,
     exercises: activeWorkout.exercises.map(ex => ({
       exerciseId: ex.exerciseId,
       exerciseName: ex.name,
@@ -1839,6 +2098,15 @@ async function saveAndFinishWorkout() {
   };
 
   appData.history.push(finishedSession);
+
+  if (isCurrentlyOffline) {
+    addToSyncQueue({
+      type: 'FINISH_WORKOUT',
+      workoutId: finishedSession.id,
+      timestamp: Date.now()
+    });
+  }
+
   await saveUserData();
 
   if (activeWorkoutTimerInterval) clearInterval(activeWorkoutTimerInterval);
@@ -1855,7 +2123,12 @@ async function saveAndFinishWorkout() {
   if (headerBtn) headerBtn.classList.add('hidden');
 
   switchTab('history');
-  showToast('Parabéns! Treino salvo com sucesso!');
+
+  if (isCurrentlyOffline) {
+    showToast('Treino salvo no aparelho! Será sincronizado assim que a conexão voltar.', 'warning');
+  } else {
+    showToast('Parabéns! Treino salvo com sucesso!');
+  }
 }
 
 // -------------------------------------------------------------
@@ -2693,9 +2966,14 @@ function renderHistoryView() {
       <div class="card-opaque rounded-2xl p-4 sm:p-5 transition-all border border-zinc-800">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800">
           <div>
-            <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-zinc-300"></span>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="w-2 h-2 rounded-full ${workout.isPendingSync ? 'bg-amber-400 animate-pulse' : 'bg-zinc-300'}"></span>
               <h3 class="font-extrabold text-white text-base sm:text-lg">${escapeHtml(workout.routineName)}</h3>
+              ${workout.isPendingSync ? `
+                <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-950/70 border border-amber-800 text-amber-400 font-semibold inline-flex items-center gap-1" title="Treino salvo no celular. Será enviado para a nuvem quando a conexão voltar.">
+                  <i data-lucide="cloud-off" class="w-3 h-3"></i> Aguardando Sincronização
+                </span>
+              ` : ''}
             </div>
             <p class="text-xs text-zinc-400 font-mono mt-0.5 flex items-center gap-1.5 flex-wrap">
               <span>${formatDate(workout.date)}</span>
