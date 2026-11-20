@@ -287,7 +287,7 @@ async function getFeedForUser(userId) {
 }
 
 async function toggleLikeWorkout(userId, workoutId) {
-  const rows = await apiFetch(`history?id=eq.${encodeURIComponent(workoutId)}&select=*`);
+  const rows = await apiFetch(`history?id=eq.${encodeURIComponent(workoutId)}&select=id,exercises`);
   if (!rows || rows.length === 0) throw new Error('Treino não encontrado');
 
   const h = rows[0];

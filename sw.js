@@ -1,10 +1,10 @@
 // Reppo Service Worker with Network-First Strategy for Instant Updates
-const CACHE_NAME = 'reppo-v2.2';
+const CACHE_NAME = 'reppo-v2.3';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
   './styles.css',
-  './app.js?v=2.1',
+  './app.js?v=2.3',
   './manifest.json'
 ];
 

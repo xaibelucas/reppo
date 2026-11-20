@@ -400,7 +400,182 @@ function updateUserUIHeader() {
   initLucide();
 }
 
-async function handleProfilePhotoUpload(e) {
+// =============================================================
+// CIRCULAR AVATAR FIT & CROP EDITOR
+// =============================================================
+let cropImage = null;
+let cropScale = 1.0;
+let cropPanX = 0;
+let cropPanY = 0;
+let cropFitMode = 'cover';
+let isCropDragging = false;
+let cropDragStartX = 0;
+let cropDragStartY = 0;
+let cropInitialPanX = 0;
+let cropInitialPanY = 0;
+let cropListenersInitialized = false;
+
+function openAvatarCropModal() {
+  openModal('avatarCropModal');
+}
+
+function closeAvatarCropModal() {
+  closeModal('avatarCropModal');
+  cropImage = null;
+}
+
+function initAvatarCropDragListeners() {
+  if (cropListenersInitialized) return;
+  const viewport = document.getElementById('avatarCropViewport');
+  if (!viewport) return;
+
+  viewport.addEventListener('pointerdown', (e) => {
+    if (!cropImage) return;
+    isCropDragging = true;
+    cropDragStartX = e.clientX;
+    cropDragStartY = e.clientY;
+    cropInitialPanX = cropPanX;
+    cropInitialPanY = cropPanY;
+    viewport.setPointerCapture(e.pointerId);
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    if (!isCropDragging || !cropImage) return;
+    const dx = e.clientX - cropDragStartX;
+    const dy = e.clientY - cropDragStartY;
+    const ratio = 256 / (viewport.clientWidth || 208);
+    cropPanX = cropInitialPanX + dx * ratio;
+    cropPanY = cropInitialPanY + dy * ratio;
+    renderAvatarCropCanvas();
+  });
+
+  const endDrag = (e) => {
+    if (isCropDragging) {
+      isCropDragging = false;
+      try { viewport.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+  };
+
+  viewport.addEventListener('pointerup', endDrag);
+  viewport.addEventListener('pointercancel', endDrag);
+  cropListenersInitialized = true;
+}
+
+function handleAvatarZoomChange(val) {
+  cropScale = parseFloat(val) || 1.0;
+  const text = document.getElementById('avatarZoomValText');
+  if (text) text.innerText = `${cropScale.toFixed(1)}x`;
+  renderAvatarCropCanvas();
+}
+
+function setAvatarCropFitMode(mode) {
+  cropFitMode = mode;
+  cropScale = 1.0;
+  cropPanX = 0;
+  cropPanY = 0;
+
+  const slider = document.getElementById('avatarZoomSlider');
+  if (slider) slider.value = 1;
+  const text = document.getElementById('avatarZoomValText');
+  if (text) text.innerText = '1.0x';
+
+  const coverBtn = document.getElementById('avatarFitCoverBtn');
+  const containBtn = document.getElementById('avatarFitContainBtn');
+  if (mode === 'cover') {
+    if (coverBtn) coverBtn.className = 'flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold bg-zinc-800 text-white border border-zinc-700 transition-all';
+    if (containBtn) containBtn.className = 'flex-1 py-1.5 px-3 rounded-xl text-xs font-medium text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-800 transition-all';
+  } else {
+    if (coverBtn) coverBtn.className = 'flex-1 py-1.5 px-3 rounded-xl text-xs font-medium text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-800 transition-all';
+    if (containBtn) containBtn.className = 'flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold bg-zinc-800 text-white border border-zinc-700 transition-all';
+  }
+
+  renderAvatarCropCanvas();
+}
+
+function renderAvatarCropCanvas() {
+  const canvas = document.getElementById('avatarCropCanvas');
+  if (!canvas || !cropImage) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = '#09090b';
+  ctx.fillRect(0, 0, 256, 256);
+
+  const baseScale = cropFitMode === 'contain'
+    ? Math.min(256 / cropImage.width, 256 / cropImage.height)
+    : Math.max(256 / cropImage.width, 256 / cropImage.height);
+
+  const scale = baseScale * cropScale;
+  const w = cropImage.width * scale;
+  const h = cropImage.height * scale;
+  const dx = 128 + cropPanX - w / 2;
+  const dy = 128 + cropPanY - h / 2;
+
+  ctx.drawImage(cropImage, dx, dy, w, h);
+}
+
+async function saveCroppedAvatar() {
+  if (!cropImage) return;
+
+  try {
+    showToast('Salvando foto de perfil...');
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = 256;
+    exportCanvas.height = 256;
+    const expCtx = exportCanvas.getContext('2d');
+
+    // Circular clipping
+    expCtx.beginPath();
+    expCtx.arc(128, 128, 128, 0, Math.PI * 2);
+    expCtx.closePath();
+    expCtx.clip();
+
+    expCtx.fillStyle = '#09090b';
+    expCtx.fillRect(0, 0, 256, 256);
+
+    const baseScale = cropFitMode === 'contain'
+      ? Math.min(256 / cropImage.width, 256 / cropImage.height)
+      : Math.max(256 / cropImage.width, 256 / cropImage.height);
+
+    const scale = baseScale * cropScale;
+    const w = cropImage.width * scale;
+    const h = cropImage.height * scale;
+    const dx = 128 + cropPanX - w / 2;
+    const dy = 128 + cropPanY - h / 2;
+
+    expCtx.drawImage(cropImage, dx, dy, w, h);
+
+    const base64Data = exportCanvas.toDataURL('image/jpeg', 0.88);
+
+    const res = await fetch('/api/user/profile', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ avatarUrl: base64Data })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      if (data.user) {
+        currentUser = data.user;
+      } else if (currentUser.profile) {
+        currentUser.profile.avatarUrl = base64Data;
+      }
+      updateUserUIHeader();
+      closeAvatarCropModal();
+      showToast('Foto de perfil atualizada com sucesso!');
+    } else {
+      showToast(data.error || 'Erro ao salvar foto de perfil.', 'warning');
+    }
+  } catch (err) {
+    console.error('Erro ao salvar avatar:', err);
+    showToast('Erro de conexão ao salvar foto de perfil.', 'danger');
+  }
+}
+
+function handleProfilePhotoUpload(e) {
   const file = e.target?.files?.[0];
   if (!file) return;
 
@@ -410,55 +585,30 @@ async function handleProfilePhotoUpload(e) {
   }
 
   try {
-    showToast('Processando foto de perfil...');
     const reader = new FileReader();
     reader.onload = function(evt) {
       const img = new Image();
-      img.onload = async function() {
-        // Resize and center-crop to square 256x256
-        const canvas = document.createElement('canvas');
-        const targetSize = 256;
-        canvas.width = targetSize;
-        canvas.height = targetSize;
-        const ctx = canvas.getContext('2d');
+      img.onload = function() {
+        cropImage = img;
+        cropScale = 1.0;
+        cropPanX = 0;
+        cropPanY = 0;
+        cropFitMode = 'cover';
 
-        const minDim = Math.min(img.width, img.height);
-        const sx = (img.width - minDim) / 2;
-        const sy = (img.height - minDim) / 2;
+        const slider = document.getElementById('avatarZoomSlider');
+        if (slider) slider.value = 1;
+        const zoomText = document.getElementById('avatarZoomValText');
+        if (zoomText) zoomText.innerText = '1.0x';
 
-        ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, targetSize, targetSize);
-        const base64Data = canvas.toDataURL('image/jpeg', 0.85);
-
-        try {
-          const res = await fetch('/api/user/profile', {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${authToken}`
-            },
-            body: JSON.stringify({ avatarUrl: base64Data })
-          });
-
-          const data = await res.json();
-          if (res.ok) {
-            if (data.user) {
-              currentUser = data.user;
-            } else if (currentUser.profile) {
-              currentUser.profile.avatarUrl = base64Data;
-            }
-            updateUserUIHeader();
-            showToast('Foto de perfil atualizada com sucesso!');
-          } else {
-            showToast(data.error || 'Erro ao salvar foto de perfil.', 'warning');
-          }
-        } catch (err) {
-          console.error('Erro ao enviar avatar:', err);
-          showToast('Erro de conexão ao salvar foto de perfil.', 'danger');
-        }
+        setAvatarCropFitMode('cover');
+        openAvatarCropModal();
+        initAvatarCropDragListeners();
+        renderAvatarCropCanvas();
       };
       img.src = evt.target.result;
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   } catch (err) {
     console.error('Erro ao ler imagem:', err);
     showToast('Erro ao carregar arquivo de imagem.', 'danger');
@@ -2789,8 +2939,8 @@ function handleSearchAthletes(query) {
         const initials = getInitials(u.name);
         const handle = u.username ? `@${escapeHtml(u.username)}` : `@${escapeHtml(u.name.toLowerCase().replace(/\s+/g, ''))}`;
         const avatarHtml = u.avatarUrl
-          ? `<img src="${u.avatarUrl}" alt="${escapeHtml(u.name)}" class="w-10 h-10 rounded-xl object-cover border border-zinc-700" />`
-          : `<div class="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
+          ? `<img src="${u.avatarUrl}" alt="${escapeHtml(u.name)}" class="w-10 h-10 rounded-full object-cover border border-zinc-700" />`
+          : `<div class="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
 
         const bioHtml = u.bio ? `<p class="text-[11px] text-zinc-400 truncate mt-0.5">${escapeHtml(u.bio)}</p>` : '';
 
@@ -2902,8 +3052,8 @@ async function renderFeedTab(force = false) {
       const initials = getInitials(item.authorName);
       const handle = item.authorUsername ? `@${escapeHtml(item.authorUsername)}` : '';
       const avatarHtml = item.authorAvatarUrl
-        ? `<img src="${item.authorAvatarUrl}" alt="${escapeHtml(item.authorName)}" class="w-10 h-10 rounded-xl object-cover border border-zinc-700" />`
-        : `<div class="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
+        ? `<img src="${item.authorAvatarUrl}" alt="${escapeHtml(item.authorName)}" class="w-10 h-10 rounded-full object-cover border border-zinc-700" />`
+        : `<div class="w-10 h-10 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center font-bold text-xs text-zinc-300">${initials}</div>`;
 
       // Calculate total volume & total sets
       let totalVolume = 0;
@@ -3041,6 +3191,52 @@ function toggleFeedItemExercises(workoutId) {
 }
 
 async function toggleLikeFeedWorkout(workoutId, btnEl) {
+  // Find item in current feed memory
+  const feedItem = (currentFeedData || []).find(item => item.id === workoutId);
+  const wasLiked = feedItem ? !!feedItem.isLiked : btnEl.classList.contains('bg-zinc-100');
+  const prevCount = feedItem ? (feedItem.likesCount || 0) : parseInt(btnEl.querySelector('.like-count')?.innerText || '0', 10);
+
+  const newLiked = !wasLiked;
+  const newCount = Math.max(0, prevCount + (newLiked ? 1 : -1));
+
+  // 0ms Optimistic UI updates immediately
+  if (feedItem) {
+    feedItem.isLiked = newLiked;
+    feedItem.likesCount = newCount;
+  }
+
+  const countEl = btnEl.querySelector('.like-count');
+  const labelEl = btnEl.querySelector('.like-label');
+  const iconEl = btnEl.querySelector('[data-lucide="thumbs-up"], svg');
+
+  if (newLiked) {
+    btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-100 text-zinc-950 font-bold border-white shadow-sm';
+    if (labelEl) labelEl.innerText = 'Curtiu';
+    if (iconEl) iconEl.classList.add('fill-current');
+  } else {
+    btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750 font-semibold';
+    if (labelEl) labelEl.innerText = 'Curtir';
+    if (iconEl) iconEl.classList.remove('fill-current');
+  }
+  if (countEl) countEl.innerText = newCount;
+
+  function rollback() {
+    if (feedItem) {
+      feedItem.isLiked = wasLiked;
+      feedItem.likesCount = prevCount;
+    }
+    if (wasLiked) {
+      btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-100 text-zinc-950 font-bold border-white shadow-sm';
+      if (labelEl) labelEl.innerText = 'Curtiu';
+      if (iconEl) iconEl.classList.add('fill-current');
+    } else {
+      btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750 font-semibold';
+      if (labelEl) labelEl.innerText = 'Curtir';
+      if (iconEl) iconEl.classList.remove('fill-current');
+    }
+    if (countEl) countEl.innerText = prevCount;
+  }
+
   try {
     const res = await fetch('/api/history/like', {
       method: 'POST',
@@ -3053,23 +3249,268 @@ async function toggleLikeFeedWorkout(workoutId, btnEl) {
 
     const data = await res.json();
     if (res.ok) {
-      const countEl = btnEl.querySelector('.like-count');
-      const labelEl = btnEl.querySelector('.like-label');
-
-      if (data.isLiked) {
-        btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-100 text-zinc-950 font-bold border-white shadow-sm';
-        if (labelEl) labelEl.innerText = 'Curtiu';
-      } else {
-        btnEl.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-750 font-semibold';
-        if (labelEl) labelEl.innerText = 'Curtir';
+      if (feedItem) {
+        feedItem.isLiked = data.isLiked;
+        feedItem.likesCount = data.likesCount;
       }
       if (countEl) countEl.innerText = data.likesCount;
-      initLucide();
     } else {
-      showToast(data.error || 'Erro ao curtir treino.', 'warning');
+      rollback();
+      showToast(data.error || 'Erro ao sincronizar curtida.', 'warning');
     }
   } catch (e) {
     console.error('Erro ao curtir treino:', e);
-    showToast('Erro ao registrar curtida.', 'danger');
+    rollback();
+    showToast('Erro ao salvar curtida.', 'danger');
+  }
+}
+
+// =============================================================
+// SMART ROUTINE TEXT IMPORTER
+// =============================================================
+let currentImportParsedItems = [];
+
+function openImportRoutineModal() {
+  const textarea = document.getElementById('importRoutineRawText');
+  if (textarea) textarea.value = '';
+  const inputStep = document.getElementById('importTextStepInput');
+  const previewStep = document.getElementById('importTextStepPreview');
+  if (inputStep) inputStep.classList.remove('hidden');
+  if (previewStep) previewStep.classList.add('hidden');
+
+  openModal('importRoutineTextModal');
+  if (textarea) setTimeout(() => textarea.focus(), 100);
+}
+
+function backToImportTextInput() {
+  const inputStep = document.getElementById('importTextStepInput');
+  const previewStep = document.getElementById('importTextStepPreview');
+  if (inputStep) inputStep.classList.remove('hidden');
+  if (previewStep) previewStep.classList.add('hidden');
+}
+
+function inferMuscleFromExerciseName(name) {
+  const n = (name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (/supino|crucifixo|crossover|cross over|peito|paralela|chest/.test(n)) return 'Peito';
+  if (/puxada|remada|pulldown|pull down|costas|barra fixa|serrote|lat/.test(n)) return 'Costas';
+  if (/agachamento|leg press|extensora|flexora|panturrilha|quadriceps|stiff|hack|afundo|bulgaro|búlgaro|adutora|abdutora|gluteo|glúteo|perna/.test(n)) return 'Pernas';
+  if (/desenvolvimento|elevacao|elevação|lateral|frontal|ombro|deltoide/.test(n)) return 'Ombros';
+  if (/triceps|tríceps|testa|corda|coice|frances|francês/.test(n)) return 'Tríceps';
+  if (/biceps|bíceps|rosca|martelo|scott/.test(n)) return 'Bíceps';
+  if (/abdominal|prancha|infra|crunch|abdomen|abdômen/.test(n)) return 'Abdômen';
+  return 'Outros';
+}
+
+function parseRoutineText(rawText) {
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+
+  let routineName = 'Treino Importado';
+  let startIndex = 0;
+
+  const firstLine = lines[0].replace(/^[\d+.\-*•\s)]+/, '').trim();
+  const hasSetsReps = /(?:\d+\s*(?:x|X|×|séries?|series?|reps?)\s*\d*)/i.test(firstLine);
+  if (!hasSetsReps || /treino|ficha|rotina|workout|divisao|divisão|dia\s+[a-z]/i.test(firstLine)) {
+    routineName = firstLine.replace(/[:\-–—\s]+$/, '').trim() || 'Treino Importado';
+    startIndex = 1;
+  }
+
+  const items = [];
+  for (let i = startIndex; i < lines.length; i++) {
+    let line = lines[i].replace(/^[\d+.\-*•\s)]+/, '').trim();
+    if (!line || /^[-=_*]{3,}$/.test(line)) continue;
+
+    let targetSets = 4;
+    let targetReps = '10';
+
+    const matchX = line.match(/(?:(\d+)\s*(?:x|X|×)\s*(\d+(?:-\d+)?))/i);
+    const matchSeries = line.match(/(?:(\d+)\s*(?:séries?|series?)\s*(?:de\s*)?(\d+(?:-\d+)?))/i);
+
+    if (matchX) {
+      targetSets = parseInt(matchX[1], 10);
+      targetReps = matchX[2];
+      line = line.replace(matchX[0], '');
+    } else if (matchSeries) {
+      targetSets = parseInt(matchSeries[1], 10);
+      targetReps = matchSeries[2];
+      line = line.replace(matchSeries[0], '');
+    }
+
+    let cleanName = line
+      .replace(/\([^)]*\)/g, '')
+      .replace(/:\s*\d+.*$/, '')
+      .replace(/\s+\d+\s*(?:kg|kgs|quilos)/i, '')
+      .replace(/^[:\-–—\s]+|[:\-–—\s]+$/g, '')
+      .trim();
+
+    if (cleanName.length >= 2) {
+      items.push({
+        rawName: cleanName,
+        sets: targetSets,
+        reps: targetReps,
+        inferredMuscle: inferMuscleFromExerciseName(cleanName)
+      });
+    }
+  }
+
+  return { routineName, items };
+}
+
+function processImportedRoutineText() {
+  const textarea = document.getElementById('importRoutineRawText');
+  const rawText = (textarea?.value || '').trim();
+  if (!rawText) {
+    showToast('Por favor, cole o texto da rotina para importar.', 'warning');
+    return;
+  }
+
+  const parsed = parseRoutineText(rawText);
+  if (!parsed || parsed.items.length === 0) {
+    showToast('Nenhum exercício identificado no texto. Verifique o formato e tente novamente.', 'warning');
+    return;
+  }
+
+  currentImportParsedItems = parsed.items.map(item => {
+    const normRaw = item.rawName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const match = (appData.exercises || []).find(ex => {
+      const normEx = ex.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return normEx === normRaw || normEx.includes(normRaw) || normRaw.includes(normEx);
+    });
+
+    if (match) {
+      return {
+        exerciseId: match.id,
+        exerciseName: match.name,
+        muscle: match.muscle,
+        sets: item.sets,
+        reps: item.reps,
+        isExisting: true
+      };
+    } else {
+      return {
+        exerciseId: null,
+        exerciseName: item.rawName,
+        muscle: item.inferredMuscle,
+        sets: item.sets,
+        reps: item.reps,
+        isExisting: false
+      };
+    }
+  });
+
+  const nameInput = document.getElementById('importPreviewRoutineName');
+  if (nameInput) nameInput.value = parsed.routineName;
+
+  renderImportPreviewList();
+
+  const inputStep = document.getElementById('importTextStepInput');
+  const previewStep = document.getElementById('importTextStepPreview');
+  if (inputStep) inputStep.classList.add('hidden');
+  if (previewStep) previewStep.classList.remove('hidden');
+  initLucide();
+}
+
+function renderImportPreviewList() {
+  const container = document.getElementById('importPreviewExercisesList');
+  const countEl = document.getElementById('importPreviewCount');
+  if (countEl) countEl.innerText = currentImportParsedItems.length;
+  if (!container) return;
+
+  if (currentImportParsedItems.length === 0) {
+    container.innerHTML = `<p class="text-xs text-zinc-500 py-4 text-center">Nenhum exercício selecionado.</p>`;
+    return;
+  }
+
+  container.innerHTML = currentImportParsedItems.map((item, index) => {
+    return `
+      <div class="flex items-center justify-between p-2.5 rounded-xl bg-zinc-900/90 border border-zinc-800 text-xs">
+        <div class="min-w-0 flex-1 pr-2">
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-white truncate">${escapeHtml(item.exerciseName)}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded ${
+              item.isExisting
+                ? 'bg-zinc-800 text-zinc-300 border border-zinc-700'
+                : 'bg-emerald-950/70 text-emerald-400 border border-emerald-800/80'
+            }">${item.isExisting ? 'No Catálogo' : 'Novo'}</span>
+          </div>
+          <div class="flex items-center gap-2 mt-1 text-[11px] text-zinc-400">
+            <span class="font-medium text-zinc-400">${escapeHtml(item.muscle)}</span>
+            <span>•</span>
+            <span class="font-mono text-zinc-300 font-semibold">${item.sets} séries x ${escapeHtml(String(item.reps))} reps</span>
+          </div>
+        </div>
+        <button type="button" onclick="removeImportPreviewItem(${index})" title="Remover da lista" class="text-zinc-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-zinc-800 transition-colors">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+      </div>
+    `;
+  }).join('');
+  initLucide();
+}
+
+function removeImportPreviewItem(index) {
+  if (index >= 0 && index < currentImportParsedItems.length) {
+    currentImportParsedItems.splice(index, 1);
+    renderImportPreviewList();
+  }
+}
+
+async function saveImportedRoutine() {
+  if (!currentImportParsedItems || currentImportParsedItems.length === 0) {
+    showToast('A rotina não contém nenhum exercício para salvar.', 'warning');
+    return;
+  }
+
+  const nameInput = document.getElementById('importPreviewRoutineName');
+  const routineName = (nameInput?.value || '').trim() || 'Treino Importado';
+
+  const exerciseIds = [];
+
+  for (const item of currentImportParsedItems) {
+    if (item.isExisting && item.exerciseId) {
+      exerciseIds.push(item.exerciseId);
+    } else {
+      let existingInApp = (appData.exercises || []).find(e => e.name.toLowerCase() === item.exerciseName.toLowerCase());
+      if (existingInApp) {
+        exerciseIds.push(existingInApp.id);
+      } else {
+        const newId = 'ex_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+        const newEx = {
+          id: newId,
+          name: item.exerciseName,
+          muscle: item.muscle || 'Outros',
+          equipment: 'Outro',
+          machineSettings: '',
+          notes: 'Importado por texto',
+          targetRepMin: parseInt(item.reps, 10) || 8,
+          targetRepMax: parseInt(item.reps, 10) || 12
+        };
+        appData.exercises.push(newEx);
+        exerciseIds.push(newId);
+      }
+    }
+  }
+
+  const newRoutine = {
+    id: 'rot_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    name: routineName,
+    description: 'Rotina importada via texto',
+    exerciseIds: exerciseIds,
+    defaultSets: 3,
+    isPublic: false
+  };
+
+  if (!appData.routines) appData.routines = [];
+  appData.routines.push(newRoutine);
+
+  try {
+    await saveUserData();
+    closeModal('importRoutineTextModal');
+    renderRoutinesList();
+    renderWorkoutTab();
+    showToast(`Rotina "${routineName}" importada com sucesso! (${exerciseIds.length} exercícios)`);
+  } catch (err) {
+    console.error('Erro ao salvar rotina importada:', err);
+    showToast('Erro ao salvar rotina.', 'danger');
   }
 }
