@@ -909,7 +909,7 @@ function switchTab(tabName, immediate = false) {
     deskActive.classList.remove('border-transparent', 'text-zinc-400');
   }
 
-  ['workout', 'routines', 'exercises', 'history', 'feed'].forEach(t => {
+  ['feed', 'workout', 'exercises', 'history'].forEach(t => {
     const mobBtn = document.getElementById(`mob-tab-${t}`);
     if (mobBtn) {
       if (t === tabName) {
@@ -936,17 +936,7 @@ function switchTab(tabName, immediate = false) {
   const skeletonEl = document.getElementById(`skeleton-${tabName}`);
   const contentEl = document.getElementById(`content-${tabName}`);
 
-  // 4. ACTIVE WORKOUT EXCEPTION:
-  // If switching to "workout" and there is an ongoing live workout, show immediately with zero delay!
-  if (tabName === 'workout' && activeWorkout !== null && !immediate) {
-    if (skeletonEl) skeletonEl.classList.add('hidden');
-    if (contentEl) contentEl.classList.remove('hidden');
-    renderWorkoutTab();
-    initLucide();
-    return;
-  }
-
-  // 5. If immediate bypass requested programmatically
+  // 4. If immediate bypass requested programmatically
   if (immediate) {
     if (skeletonEl) skeletonEl.classList.add('hidden');
     if (contentEl) contentEl.classList.remove('hidden');
@@ -955,7 +945,7 @@ function switchTab(tabName, immediate = false) {
     return;
   }
 
-  // 6. Standard Tab Loading Flow: Show Dedicated Skeleton for at least 2000ms (2s)
+  // 5. Standard Tab Loading Flow
   if (skeletonEl) skeletonEl.classList.remove('hidden');
   if (contentEl) contentEl.classList.add('hidden');
   initLucide();
@@ -978,22 +968,22 @@ function switchTab(tabName, immediate = false) {
 }
 
 function renderTabContent(tabName) {
-  if (tabName === 'routines') renderRoutinesList();
+  if (tabName === 'feed') renderFeedTab();
+  if (tabName === 'workout') {
+    renderWorkoutTab();
+  }
   if (tabName === 'exercises') renderExercisesCatalog();
   if (tabName === 'history') {
     renderHistoryView();
     populateHistoryExerciseSelect();
   }
-  if (tabName === 'workout') renderWorkoutTab();
-  if (tabName === 'feed') renderFeedTab();
 }
 
 function renderAllViews() {
+  renderFeedTab();
   renderWorkoutTab();
-  renderRoutinesList();
   renderExercisesCatalog();
   renderHistoryView();
-  populateHistoryExerciseSelect();
 }
 
 // -------------------------------------------------------------
@@ -1081,53 +1071,47 @@ function predictRepsForWeight(exerciseId, newWeightKg) {
 // -------------------------------------------------------------
 
 function renderWorkoutTab() {
-  const noActiveDiv = document.getElementById('no-active-workout-section');
-  const activeDiv = document.getElementById('active-workout-section');
-  const activeHeaderBtn = document.getElementById('activeWorkoutHeaderBtn');
+  renderRoutinesList();
+  renderLastWorkoutSnapshot();
+}
 
-  if (activeWorkout) {
-    if (noActiveDiv) noActiveDiv.classList.add('hidden');
-    if (activeDiv) activeDiv.classList.remove('hidden');
-    if (activeHeaderBtn) activeHeaderBtn.classList.remove('hidden');
-    renderActiveWorkoutSession();
-  } else {
-    if (noActiveDiv) noActiveDiv.classList.remove('hidden');
-    if (activeDiv) activeDiv.classList.add('hidden');
-    if (activeHeaderBtn) activeHeaderBtn.classList.add('hidden');
-    renderQuickRoutines();
-    renderLastWorkoutSnapshot();
+let isWorkoutDrawerMaximized = false;
+
+function minimizeActiveWorkout() {
+  isWorkoutDrawerMaximized = false;
+  const drawer = document.getElementById('activeWorkoutFullDrawer');
+  const bottomBar = document.getElementById('activeWorkoutBottomBar');
+  if (drawer) drawer.classList.add('hidden');
+  if (activeWorkout && bottomBar) {
+    bottomBar.classList.remove('hidden');
+    updateMiniActiveWorkoutBar();
+    initLucide();
   }
 }
 
-function renderQuickRoutines() {
-  const container = document.getElementById('quickRoutinesList');
-  if (!container) return;
-
-  if (appData.routines.length === 0) {
-    container.innerHTML = `
-      <div class="col-span-full text-xs text-zinc-500 card-opaque rounded-2xl p-4 text-center border border-zinc-800">
-        Nenhuma rotina criada nesta conta. Crie sua primeira rotina na aba "Rotinas" ou inicie um treino livre!
-      </div>
-    `;
-    return;
+function maximizeActiveWorkout() {
+  if (!activeWorkout) return;
+  isWorkoutDrawerMaximized = true;
+  const drawer = document.getElementById('activeWorkoutFullDrawer');
+  const bottomBar = document.getElementById('activeWorkoutBottomBar');
+  if (bottomBar) bottomBar.classList.add('hidden');
+  if (drawer) {
+    drawer.classList.remove('hidden');
+    renderActiveWorkoutSession();
+    initLucide();
   }
+}
 
-  container.innerHTML = appData.routines.slice(0, 4).map(rot => {
-    const count = (rot.exerciseIds || []).length;
-    return `
-      <div class="card-opaque border border-zinc-800 hover:border-zinc-700 rounded-2xl p-4 flex items-center justify-between gap-3 transition-all">
-        <div>
-          <h4 class="font-bold text-white text-sm">${escapeHtml(rot.name)}</h4>
-          <span class="text-xs text-zinc-400 font-mono">${count} exercício${count === 1 ? '' : 's'}</span>
-        </div>
-        <button onclick="startWorkoutWithRoutine('${rot.id}')" class="bg-zinc-100 hover:bg-white text-zinc-950 font-bold px-3.5 py-1.5 rounded-xl text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-md">
-          <i data-lucide="play" class="w-3.5 h-3.5 stroke-[2.5]"></i> Iniciar
-        </button>
-      </div>
-    `;
-  }).join('');
-
-  initLucide();
+function updateMiniActiveWorkoutBar() {
+  if (!activeWorkout) return;
+  const miniTitle = document.getElementById('miniWorkoutTitle');
+  const miniSets = document.getElementById('miniWorkoutSets');
+  if (miniTitle) miniTitle.innerText = activeWorkout.title || 'Treino Ativo';
+  if (miniSets) {
+    const totalSets = (activeWorkout.exercises || []).reduce((acc, ex) => acc + (ex.sets?.length || 0), 0);
+    const completedSets = (activeWorkout.exercises || []).reduce((acc, ex) => acc + (ex.sets || []).filter(s => s.completed).length, 0);
+    miniSets.innerText = `${completedSets}/${totalSets} séries`;
+  }
 }
 
 function renderLastWorkoutSnapshot() {
@@ -1179,7 +1163,7 @@ function startQuickWorkout() {
   };
   saveActiveWorkoutState();
   startActiveWorkoutTimer();
-  switchTab('workout');
+  maximizeActiveWorkout();
   showToast('Treino livre iniciado! Adicione seus exercícios.');
 }
 
@@ -1225,7 +1209,7 @@ function startWorkoutWithRoutine(routineId) {
 
   saveActiveWorkoutState();
   startActiveWorkoutTimer();
-  switchTab('workout');
+  maximizeActiveWorkout();
   showToast(`Treino "${routine.name}" iniciado! Bom treino!`);
 }
 
@@ -1236,6 +1220,11 @@ function restoreActiveWorkout() {
       activeWorkout = JSON.parse(saved);
       if (activeWorkout && activeWorkout.startTime) {
         startActiveWorkoutTimer();
+        const bottomBar = document.getElementById('activeWorkoutBottomBar');
+        if (bottomBar) {
+          bottomBar.classList.remove('hidden');
+          updateMiniActiveWorkoutBar();
+        }
       }
     } catch (e) {
       activeWorkout = null;
@@ -1267,6 +1256,9 @@ function updateSessionTimerDisplay() {
 
   const headerTimer = document.getElementById('headerTimerText');
   if (headerTimer) headerTimer.innerText = formatted;
+
+  const miniTimer = document.getElementById('miniSessionTimerText');
+  if (miniTimer) miniTimer.innerText = formatted;
 }
 
 function renderActiveWorkoutSession() {
@@ -1529,6 +1521,7 @@ function toggleSetCompleted(exIndex, setIndex) {
   }
 
   saveActiveWorkoutState();
+  updateMiniActiveWorkoutBar();
   renderActiveWorkoutSession();
 }
 
@@ -1546,6 +1539,7 @@ function addSetToExercise(exIndex) {
   });
 
   saveActiveWorkoutState();
+  updateMiniActiveWorkoutBar();
   renderActiveWorkoutSession();
 }
 
@@ -1556,6 +1550,7 @@ function removeSetFromExercise(exIndex, setIndex) {
   sets.forEach((s, idx) => s.setNumber = idx + 1);
 
   saveActiveWorkoutState();
+  updateMiniActiveWorkoutBar();
   renderActiveWorkoutSession();
 }
 
@@ -1565,6 +1560,7 @@ function removeExerciseFromSession(exIndex) {
 
   activeWorkout.exercises.splice(exIndex, 1);
   saveActiveWorkoutState();
+  updateMiniActiveWorkoutBar();
   renderActiveWorkoutSession();
 }
 
@@ -1622,6 +1618,7 @@ function addExerciseToActiveWorkout(exerciseId) {
   });
 
   saveActiveWorkoutState();
+  updateMiniActiveWorkoutBar();
   closeModal('addExerciseSessionModal');
   renderActiveWorkoutSession();
   showToast(`"${exObj.name}" adicionado ao treino!`);
@@ -1634,6 +1631,14 @@ function cancelActiveWorkout() {
   activeWorkout = null;
   saveActiveWorkoutState();
   closeRestTimer();
+
+  const drawer = document.getElementById('activeWorkoutFullDrawer');
+  const bottomBar = document.getElementById('activeWorkoutBottomBar');
+  const headerBtn = document.getElementById('activeWorkoutHeaderBtn');
+  if (drawer) drawer.classList.add('hidden');
+  if (bottomBar) bottomBar.classList.add('hidden');
+  if (headerBtn) headerBtn.classList.add('hidden');
+
   renderWorkoutTab();
   showToast('Treino cancelado.');
 }
@@ -1691,6 +1696,13 @@ async function saveAndFinishWorkout() {
   saveActiveWorkoutState();
   closeRestTimer();
   closeModal('finishWorkoutModal');
+
+  const drawer = document.getElementById('activeWorkoutFullDrawer');
+  const bottomBar = document.getElementById('activeWorkoutBottomBar');
+  const headerBtn = document.getElementById('activeWorkoutHeaderBtn');
+  if (drawer) drawer.classList.add('hidden');
+  if (bottomBar) bottomBar.classList.add('hidden');
+  if (headerBtn) headerBtn.classList.add('hidden');
 
   switchTab('history');
   showToast('Parabéns! Treino salvo com sucesso!');
